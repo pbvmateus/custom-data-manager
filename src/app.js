@@ -14,6 +14,17 @@
 (function () {
   'use strict';
 
+  // Global error trap — surface any uncaught JS error on the loading screen
+  window.addEventListener('error', function (ev) {
+    var el = document.getElementById('boot-log');
+    if (el) {
+      var line = document.createElement('div');
+      line.style.color = '#feb2b2';
+      line.textContent = '✗ JS ERROR: ' + ev.message + ' @ ' + (ev.filename || '').split('/').pop() + ':' + ev.lineno;
+      el.appendChild(line);
+    }
+  });
+
   // ── Routes ─────────────────────────────────────────────────────────────
   const ROUTES = [
     { path: '/objects',        id: 'section-objects' },
@@ -91,7 +102,23 @@
   // ── Shell SDK init — exact pattern from the sample ────────────────────
   const { ShellSdk, SHELL_EVENTS } = FSMShell;
 
+  // Visible boot log — writes to the loading screen so the handshake is always visible
+  function bootLog(msg, color) {
+    var el = document.getElementById('boot-log');
+    if (!el) return;
+    var time = new Date().toLocaleTimeString();
+    var line = document.createElement('div');
+    line.style.color = color || '#cbd5e0';
+    line.textContent = time + '  ' + msg;
+    el.appendChild(line);
+    el.scrollTop = el.scrollHeight;
+    console.log('[boot]', msg);
+  }
+
   DBG.init();
+
+  bootLog('Script loaded. FSMShell present: ' + (!!window.FSMShell));
+  bootLog('isInsideShell(): ' + ShellSdk.isInsideShell());
 
   if (ShellSdk.isInsideShell()) {
     // Hide own navigation — Shell provides navigation via Luigi
@@ -123,6 +150,7 @@
     //    The token must be requested separately via REQUIRE_AUTHENTICATION.
     SHELL_SDK.on(SHELL_EVENTS.Version1.REQUIRE_CONTEXT, function (ctx) {
       ctxReceived = true;
+      bootLog('✓ REQUIRE_CONTEXT response received', '#9ae6b4');
       if (typeof ctx === 'string') {
         try { ctx = JSON.parse(ctx); } catch (e) { /* ignore */ }
       }
@@ -133,6 +161,7 @@
         company:     ctx.company,
       };
       gotContext = true;
+      bootLog('  cloudHost=' + ctx.cloudHost + ' account=' + ctx.account + ' company=' + ctx.company);
 
       DBG.setCtx(ctx);
       console.log('[Custom Objects] Context:', {
@@ -142,18 +171,20 @@
 
       // A token may already be present (apps), use it if so
       var t = (ctx.auth && ctx.auth.access_token) || ctx.authToken || null;
-      if (t) { authToken = t; gotToken = true; }
+      if (t) { authToken = t; gotToken = true; bootLog('✓ Token present in context', '#9ae6b4'); }
 
       maybeStart();
 
       // Extensions: explicitly request a restricted token
       if (!gotToken) {
+        bootLog('→ Requesting token via REQUIRE_AUTHENTICATION…', '#faf089');
         SHELL_SDK.emit(SHELL_EVENTS.Version1.REQUIRE_AUTHENTICATION, { response_type: 'token' });
       }
     });
 
     // 2) REQUIRE_AUTHENTICATION → gives us the access_token for the extension
     SHELL_SDK.on(SHELL_EVENTS.Version1.REQUIRE_AUTHENTICATION, function (auth) {
+      bootLog('✓ REQUIRE_AUTHENTICATION response received', '#9ae6b4');
       if (typeof auth === 'string') {
         try { auth = JSON.parse(auth); } catch (e) { /* ignore */ }
       }
@@ -162,9 +193,10 @@
       if (t) {
         authToken = t;
         gotToken = true;
-        DBG.logError('Token received via REQUIRE_AUTHENTICATION (expires_in=' + (auth.expires_in || '?') + ')');
+        bootLog('✓ Token acquired (expires_in=' + (auth.expires_in || '?') + ')', '#9ae6b4');
         maybeStart();
       } else {
+        bootLog('✗ No access_token in response: ' + JSON.stringify(auth), '#feb2b2');
         DBG.logError('REQUIRE_AUTHENTICATION returned no access_token: ' + JSON.stringify(auth));
       }
     });
@@ -172,6 +204,7 @@
     // Start only once we have BOTH the env context AND a token
     function maybeStart() {
       if (gotContext && gotToken && apiConfig && apiConfig.clusterHost && authToken) {
+        bootLog('✓ Handshake complete — loading objects', '#9ae6b4');
         document.getElementById('loading-overlay').style.display = 'none';
         bindUI();
         loadObjects();
@@ -179,6 +212,7 @@
     }
 
     // ── Now emit (listeners are in place) ─────────────────────────────────
+    bootLog('→ Emitting GET_STORAGE_ITEM + REQUIRE_CONTEXT…', '#faf089');
     SHELL_SDK.emit(SHELL_EVENTS.Version1.GET_STORAGE_ITEM, 'Cockpit_SelectedLocale');
 
     // For extensions, REQUIRE_CONTEXT takes only clientIdentifier (per SAP sample).
@@ -190,18 +224,13 @@
     // Diagnostic timeout
     setTimeout(function () {
       if (!gotContext || !gotToken) {
-        document.getElementById('load-msg').textContent =
-          'Shell handshake incomplete. Open the 🐛 Debug panel (bottom-right).';
-        DBG.setCtx({
-          _status:      'HANDSHAKE_INCOMPLETE',
-          _gotContext:  gotContext,
-          _gotToken:    gotToken,
-          _clusterHost: apiConfig ? apiConfig.clusterHost : null,
-          _message:     'REQUIRE_CONTEXT / REQUIRE_AUTHENTICATION did not both complete within 8s.',
-          _hint:        gotContext && !gotToken
-            ? 'Got env context but NO token. REQUIRE_AUTHENTICATION did not return access_token — check the extension is allowed to request tokens.'
-            : 'No context response at all from the Shell.',
-        });
+        bootLog('✗ TIMEOUT after 8s — gotContext=' + gotContext + ' gotToken=' + gotToken, '#feb2b2');
+        if (!gotContext) {
+          bootLog('  The Shell never responded to REQUIRE_CONTEXT.', '#feb2b2');
+          bootLog('  postMessage handshake is not reaching the Shell host.', '#feb2b2');
+        } else if (!gotToken) {
+          bootLog('  Got env context but REQUIRE_AUTHENTICATION gave no token.', '#feb2b2');
+        }
       }
     }, 8000);
 

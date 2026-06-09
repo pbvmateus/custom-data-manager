@@ -18,7 +18,12 @@
     </div>
     <h2>Custom Objects Manager</h2>
     <p id="load-msg">Connecting to SAP FSM Shell…</p>
+    <!-- Live diagnostic log — always visible so you can see the handshake -->
+    <div id="boot-log" style="margin-top:18px; width:min(520px,90vw); max-height:300px; overflow:auto;
+         background:#1d2129; color:#cbd5e0; font-family:monospace; font-size:11px;
+         border-radius:6px; padding:10px 12px; text-align:left; line-height:1.6;"></div>
   </div>
+
 
   <!-- Top bar (hidden when inside Shell — Shell provides its own) -->
   <div id="top-bar" class="fd-shellbar">
