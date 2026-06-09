@@ -326,13 +326,44 @@
 
     navigateTo('/records');
 
+    // Load records IMMEDIATELY (don't wait for field metadata).
+    loadRecords();
+
+    // Load field metadata in PARALLEL. When it arrives, reload records so the
+    // id→name map produces friendly column names instead of raw field IDs.
+    // (This query can be slow/hang on some tenants, so it must not block records.)
     FSM_API.getCustomObjectFields(apiConfig, authToken, selectedObj.id)
-      .then(function (fields) { fieldDefs = fields; })
-      .catch(function (err) {
-        console.warn('[Custom Objects] getCustomObjectFields failed:', err.message);
-        fieldDefs = [];
+      .then(function (fields) {
+        fieldDefs = fields || [];
+        if (fieldDefs.length) {
+          // Re-map already-loaded records using the new field names, in place,
+          // without a second network call.
+          remapRecordColumns();
+          buildColOrder();
+          renderTable();
+        }
       })
-      .finally(function () { loadRecords(); });
+      .catch(function (err) {
+        console.warn('[Custom Objects] getCustomObjectFields failed (non-fatal):', err.message);
+        fieldDefs = [];
+      });
+  }
+
+  // Re-map record keys from field IDs to field names using loaded fieldDefs.
+  // getUdoValues stores the raw metaId as the key when fieldDefs was empty;
+  // this upgrades those keys to friendly names once fieldDefs arrives.
+  function remapRecordColumns() {
+    var idToName = {};
+    fieldDefs.forEach(function (f) { if (f.id && f.name) idToName[f.id] = f.name; });
+    function remap(rec) {
+      var out = {};
+      Object.keys(rec).forEach(function (k) {
+        out[idToName[k] || k] = rec[k];
+      });
+      return out;
+    }
+    allRecords   = allRecords.map(remap);
+    filteredRecs = filteredRecs.map(remap);
   }
 
   // ── Load records ─────────────────────────────────────────────────────
