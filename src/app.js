@@ -704,17 +704,60 @@
   function exportCsv() {
     if (!filteredRecs.length) return;
     var cols = colOrder.filter(function (c) { return !hiddenCols.has(c); });
+    if (!cols.length) return;
+
+    // Build CSV content
     var header = cols.map(function (c) {
       var name = colLabel(c);
-      return (name.indexOf(',') >= 0 || name.indexOf('"') >= 0) ? '"' + name.replace(/"/g, '""') + '"' : name;
+      return (name.indexOf(',') >= 0 || name.indexOf('"') >= 0)
+        ? '"' + name.replace(/"/g, '""') + '"' : name;
     }).join(',');
-    CSV_UTILS.downloadCsv(selectedObj.name + '_records.csv',
-      [header].concat(filteredRecs.map(function (r) {
-        return cols.map(function (c) {
-          var v = String(r[c] == null ? '' : r[c]);
-          return (v.includes(',') || v.includes('"') || v.includes('\n')) ? '"' + v.replace(/"/g, '""') + '"' : v;
-        }).join(',');
-      })).join('\n'));
+
+    var rows = filteredRecs.map(function (r) {
+      return cols.map(function (c) {
+        // Use display label for selection-list values
+        var raw = r[c];
+        var v = String(displayValue(c, raw) == null ? '' : displayValue(c, raw));
+        return (v.indexOf(',') >= 0 || v.indexOf('"') >= 0 || v.indexOf('\n') >= 0)
+          ? '"' + v.replace(/"/g, '""') + '"' : v;
+      }).join(',');
+    });
+
+    var csv = '\uFEFF' + [header].concat(rows).join('\n'); // BOM for Excel UTF-8
+    var filename = (selectedObj ? selectedObj.name : 'records') + '_export.csv';
+
+    try {
+      // Primary: Blob + object URL (works in most browsers)
+      var blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+      var url  = URL.createObjectURL(blob);
+      var a    = document.createElement('a');
+      a.href     = url;
+      a.download = filename;
+      a.style.display = 'none';
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(function () {
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+      }, 200);
+    } catch (e) {
+      // Fallback: data: URI (works in sandboxed iframes where Blob URLs are blocked)
+      try {
+        var dataUri = 'data:text/csv;charset=utf-8,' + encodeURIComponent(csv);
+        var a2 = document.createElement('a');
+        a2.href = dataUri;
+        a2.download = filename;
+        a2.style.display = 'none';
+        document.body.appendChild(a2);
+        a2.click();
+        setTimeout(function () { document.body.removeChild(a2); }, 200);
+      } catch (e2) {
+        // Last resort: open CSV in a new tab so the user can Save As
+        var w = window.open('', '_blank');
+        if (w) { w.document.write('<pre>' + csv.replace(/&/g,'&amp;').replace(/</g,'&lt;') + '</pre>'); }
+        else { alert('Could not download — please allow popups for this site.'); }
+      }
+    }
   }
 
   // ── Save bar / confirm ────────────────────────────────────────────────
