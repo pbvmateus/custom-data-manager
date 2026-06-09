@@ -385,7 +385,7 @@
   // Field metadata is used only to translate the key to a display name, not
   // to add columns — otherwise we'd get empty columns for fields no record uses.
   function buildColOrder() {
-    var sys = ['id','createDateTime','lastChanged','createPerson','lastChangedBy'];
+    var sys = ['id','createDateTime','lastChanged','createPerson','lastChangedBy','__id','__lastChanged'];
     colOrder = [];
     allRecords.forEach(function (rec) {
       Object.keys(rec).forEach(function (k) {
@@ -514,7 +514,8 @@
   // ── Open / new record ─────────────────────────────────────────────────
   function openRecord(rec) {
     editingRec = rec;
-    document.getElementById('rec-title-detail').textContent = rec.id ? 'Record: ' + String(rec.id).substring(0, 16) + '…' : 'Record';
+    var rid = rec.__id || rec.id;
+    document.getElementById('rec-title-detail').textContent = rid ? 'Record: ' + String(rid).substring(0, 16) + '…' : 'Record';
     var badge = document.getElementById('rec-badge');
     badge.textContent = 'EXISTING'; badge.className = 'co-rec-badge is-existing';
     document.getElementById('btn-delete').style.display = 'inline-flex';
@@ -591,7 +592,8 @@
 
   function buildInput(f, val) {
     var type = (f.dataType || f.type || 'STRING').toUpperCase();
-    var n = f.name, v = String(val == null ? '' : val);
+    // data-field MUST be the field id — the save API maps values by UdfMeta id.
+    var n = f.id || f.name, v = String(val == null ? '' : val);
     if (type === 'BOOLEAN') {
       var chk = val === true || v === 'true' || v === '1' || v === 'yes';
       return '<div class="co-bool-row"><input class="co-fld-ctrl" type="checkbox" data-field="' + esc(n) + '"' + (chk ? ' checked' : '') + '><span>' + (chk ? 'True' : 'False') + '</span></div>';
@@ -629,10 +631,21 @@
   function saveRecord() {
     var btn = document.getElementById('btn-save');
     btn.setAttribute('disabled', '');
-    var values = collectForm(), fieldMetaMap = {};
-    fieldDefs.forEach(function (f) { if (f.name) fieldMetaMap[f.name] = { id: f.id, name: f.name }; });
-    FSM_API.upsertRecord(apiConfig, authToken, selectedObj.name, values, fieldMetaMap, selectedObj.id)
-      .then(function () { showSaveBar('ok', '✓ Saved successfully'); return loadRecords(); })
+
+    // collectForm returns { <fieldId>: value } keyed by the input's data-field
+    var valuesById = collectForm();
+
+    // If editing an existing record we have its id + lastChanged (preserved as
+    // __id / __lastChanged) → PATCH update. Otherwise → POST create.
+    var existingId  = editingRec && editingRec.__id ? editingRec.__id : null;
+    var lastChanged = editingRec && editingRec.__lastChanged != null ? editingRec.__lastChanged : null;
+
+    FSM_API.saveUdoValue(apiConfig, authToken, selectedObj.id, valuesById, existingId, lastChanged)
+      .then(function () {
+        showSaveBar('ok', existingId ? '✓ Updated successfully' : '✓ Created successfully');
+        navigateTo('/records');
+        return loadRecords();
+      })
       .catch(function (err) { showSaveBar('err', '✗ ' + err.message); })
       .finally(function () { btn.removeAttribute('disabled'); });
   }
@@ -642,7 +655,7 @@
     if (!editingRec) return;
     showConfirm('Delete Record', 'Are you sure you want to permanently delete this record?').then(function (ok) {
       if (!ok) return;
-      var recId = editingRec.id;
+      var recId = (editingRec && editingRec.__id) || editingRec.id;
       if (!recId) { showSaveBar('err', '✗ Record has no ID.'); return; }
       var url = 'https://' + apiConfig.clusterHost + '/api/data/v4/UdoValue/' + recId +
         '?account=' + encodeURIComponent(apiConfig.account) +
@@ -692,8 +705,8 @@
     return new Promise(function (resolve) {
       var ov = document.createElement('div'); ov.className = 'co-overlay';
       ov.innerHTML = '<div class="co-dialog"><h3>' + esc(title) + '</h3><p>' + esc(msg) + '</p>' +
-        '<div class="co-dialog-btns"><button class="fd-button fd-button--transparent" id="_no">Cancel</button>' +
-        '<button class="fd-button fd-button--negative" id="_yes">Delete</button></div></div>';
+        '<div class="co-dialog-btns"><button class="co-btn co-btn--ghost" id="_no">Cancel</button>' +
+        '<button class="co-btn co-btn--danger" id="_yes">Delete</button></div></div>';
       document.body.appendChild(ov);
       ov.querySelector('#_no').addEventListener('click',  function () { ov.remove(); resolve(false); });
       ov.querySelector('#_yes').addEventListener('click', function () { ov.remove(); resolve(true);  });
@@ -838,6 +851,99 @@
         .catch(function (err) {
           clearTimeout(timer);
           var msg = err.name === 'AbortError' ? 'Upload timed out after 20s' : err.message;
+          DBG.endCall(cid, 0, 'Error', null, msg);
+          throw new Error(msg);
+        });
+    };
+
+    // Override getUdoValues to PRESERVE each record's own id + lastChanged
+    // (needed for updates). fsm-api.js drops them when flattening; we keep them
+    // under reserved keys __id / __lastChanged so they don't collide with fields.
+    FSM_API.getUdoValues = function (config, token, udoMetaId, defs, onProgress) {
+      var PAGE = 1000, MAX = 100000, all = [], offset = 0;
+      function fetchPage() {
+        return FSM_API._query(
+          config, token,
+          "SELECT u FROM UdoValue u WHERE u.meta = '" + udoMetaId + "' LIMIT " + PAGE + " OFFSET " + offset,
+          'UdoValue.10'
+        ).then(function (raw) {
+          var rows = FSM_API._unwrapRows(raw.data || []);
+          if (!rows.length) return all;
+          rows.forEach(function (row) {
+            var flat = {};
+            (row.udfValues || []).forEach(function (uv) {
+              var metaId = typeof uv.meta === 'string' ? uv.meta : (uv.meta && uv.meta.id);
+              if (metaId) flat[metaId] = uv.value;
+            });
+            // reserved metadata for updates
+            flat.__id = row.id;
+            flat.__lastChanged = row.lastChanged;
+            all.push(flat);
+          });
+          if (onProgress) onProgress(all.length);
+          if (rows.length < PAGE || all.length >= MAX) return all;
+          offset += PAGE;
+          return fetchPage();
+        });
+      }
+      return fetchPage();
+    };
+
+    // Create-or-update a UdoValue record.
+    //   existingId + lastChanged present → PATCH /UdoValue/<id>  (UPDATE)
+    //   otherwise                        → POST  /UdoValue       (CREATE)
+    FSM_API.saveUdoValue = function (config, token, udoMetaId, valuesById, existingId, lastChanged) {
+      var udfValues = Object.keys(valuesById)
+        .filter(function (k) { var v = valuesById[k]; return v !== null && v !== undefined && v !== ''; })
+        .map(function (fieldId) { return { meta: { id: fieldId }, value: String(valuesById[fieldId]) }; });
+
+      var isUpdate = !!existingId;
+      var body = { meta: { id: udoMetaId }, udfValues: udfValues };
+      if (isUpdate) {
+        body.id = existingId;
+        if (lastChanged != null) body.lastChanged = lastChanged;
+      }
+
+      var base = 'https://' + config.clusterHost + '/api/data/v4/UdoValue';
+      var url = (isUpdate ? base + '/' + existingId : base) +
+        '?account=' + encodeURIComponent(config.account) +
+        '&company=' + encodeURIComponent(config.company) + '&dtos=UdoValue.10';
+      var method = isUpdate ? 'PATCH' : 'POST';
+
+      var headers = {
+        'Authorization':    'Bearer ' + token,
+        'Content-Type':     'application/json',
+        'Accept':           'application/json',
+        'X-Client-ID':      config.clientId || 'fsm-custom-objects-manager',
+        'X-Client-Version': '1.0',
+      };
+
+      var bodyStr = JSON.stringify(body);
+      var dispHeaders = {}; Object.keys(headers).forEach(function (k) {
+        dispHeaders[k] = (k === 'Authorization') ? 'Bearer ' + String(token).substring(0, 16) + '…' : headers[k];
+      });
+      var cid = DBG.startCallSync(method, url, dispHeaders, bodyStr);
+
+      var controller = new AbortController();
+      var timer = setTimeout(function () { controller.abort(); }, 20000);
+
+      return fetch(url, { method: method, headers: headers, body: bodyStr, signal: controller.signal })
+        .then(function (res) {
+          clearTimeout(timer);
+          return res.text().then(function (text) {
+            var parsed; try { parsed = JSON.parse(text); } catch (e) { parsed = text; }
+            if (!res.ok) {
+              var msg = (parsed && parsed.error && parsed.error.message) || (parsed && parsed.message) || text.substring(0, 300);
+              DBG.endCall(cid, res.status, 'Error', parsed, 'HTTP ' + res.status + ': ' + msg);
+              throw new Error((isUpdate ? 'Update' : 'Create') + ' failed (' + res.status + '): ' + msg);
+            }
+            DBG.endCall(cid, res.status, 'OK', parsed, null);
+            return parsed;
+          });
+        })
+        .catch(function (err) {
+          clearTimeout(timer);
+          var msg = err.name === 'AbortError' ? 'Save timed out after 20s' : err.message;
           DBG.endCall(cid, 0, 'Error', null, msg);
           throw new Error(msg);
         });
