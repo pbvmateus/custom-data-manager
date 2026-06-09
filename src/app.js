@@ -93,6 +93,7 @@
   let allObjects = [];
   let selectedObj = null;
   let fieldDefs  = [];
+  let fieldIdToName = {};   // maps UdfMeta id → field name, for column display
   let allRecords = [];
   let filteredRecs = [];
   let editingRec = null;
@@ -329,16 +330,15 @@
     // Load records IMMEDIATELY (don't wait for field metadata).
     loadRecords();
 
-    // Load field metadata in PARALLEL. When it arrives, reload records so the
-    // id→name map produces friendly column names instead of raw field IDs.
-    // (This query can be slow/hang on some tenants, so it must not block records.)
+    // Load field metadata in PARALLEL. When it arrives, build the id→name map
+    // and re-render so columns show friendly names. Records keep their raw-ID
+    // keys; translation happens at render time (order-independent, no race).
     FSM_API.getCustomObjectFields(apiConfig, authToken, selectedObj.id)
       .then(function (fields) {
         fieldDefs = fields || [];
+        fieldIdToName = {};
+        fieldDefs.forEach(function (f) { if (f.id && f.name) fieldIdToName[f.id] = f.name; });
         if (fieldDefs.length) {
-          // Re-map already-loaded records using the new field names, in place,
-          // without a second network call.
-          remapRecordColumns();
           buildColOrder();
           renderTable();
         }
@@ -346,24 +346,13 @@
       .catch(function (err) {
         console.warn('[Custom Objects] getCustomObjectFields failed (non-fatal):', err.message);
         fieldDefs = [];
+        fieldIdToName = {};
       });
   }
 
-  // Re-map record keys from field IDs to field names using loaded fieldDefs.
-  // getUdoValues stores the raw metaId as the key when fieldDefs was empty;
-  // this upgrades those keys to friendly names once fieldDefs arrives.
-  function remapRecordColumns() {
-    var idToName = {};
-    fieldDefs.forEach(function (f) { if (f.id && f.name) idToName[f.id] = f.name; });
-    function remap(rec) {
-      var out = {};
-      Object.keys(rec).forEach(function (k) {
-        out[idToName[k] || k] = rec[k];
-      });
-      return out;
-    }
-    allRecords   = allRecords.map(remap);
-    filteredRecs = filteredRecs.map(remap);
+  // Display name for a column key: friendly field name if known, else the key.
+  function colLabel(key) {
+    return fieldIdToName[key] || key;
   }
 
   // ── Load records ─────────────────────────────────────────────────────
@@ -392,14 +381,17 @@
   }
 
   // ── Column order ─────────────────────────────────────────────────────
+  // Build columns from the KEYS PRESENT IN THE RECORDS (these hold the data).
+  // Field metadata is used only to translate the key to a display name, not
+  // to add columns — otherwise we'd get empty columns for fields no record uses.
   function buildColOrder() {
     var sys = ['id','createDateTime','lastChanged','createPerson','lastChangedBy'];
-    colOrder = fieldDefs.filter(function (f) { return !sys.includes(f.name); }).map(function (f) { return f.name; });
-    if (allRecords.length) {
-      Object.keys(allRecords[0]).forEach(function (k) {
-        if (!sys.includes(k) && !colOrder.includes(k)) colOrder.push(k);
+    colOrder = [];
+    allRecords.forEach(function (rec) {
+      Object.keys(rec).forEach(function (k) {
+        if (!sys.includes(k) && colOrder.indexOf(k) === -1) colOrder.push(k);
       });
-    }
+    });
   }
 
   // ── Filter / sort ─────────────────────────────────────────────────────
@@ -435,7 +427,7 @@
             '<circle cx="2" cy="6" r="1.2"/><circle cx="6" cy="6" r="1.2"/>' +
             '<circle cx="2" cy="10" r="1.2"/><circle cx="6" cy="10" r="1.2"/>' +
           '</svg></span>' +
-          '<span class="th-label" title="' + esc(col) + '">' + esc(col) + '</span>' +
+          '<span class="th-label" title="' + esc(colLabel(col)) + '">' + esc(colLabel(col)) + '</span>' +
           '<span class="sort-ico ' + (isc ? sortDir : '') + '">' +
             '<svg class="arr-u" width="7" height="5" viewBox="0 0 7 5"><path d="M3.5 0L7 5H0z" fill="currentColor"/></svg>' +
             '<svg class="arr-d" width="7" height="5" viewBox="0 0 7 5"><path d="M3.5 5L0 0h7z" fill="currentColor"/></svg>' +
@@ -543,14 +535,23 @@
   }
 
   // ── Render form ───────────────────────────────────────────────────────
+  // Record values are keyed by UdfMeta id (that's how getUdoValues flattens
+  // them). Look up by id first, then fall back to name.
+  function recVal(rec, f) {
+    if (f.id != null && rec[f.id] !== undefined) return rec[f.id];
+    if (f.name != null && rec[f.name] !== undefined) return rec[f.name];
+    return undefined;
+  }
+
   function renderForm(rec) {
     var SYS      = ['id','createDateTime','lastChanged','createPerson','lastChangedBy'];
     var editable = fieldDefs.filter(function (f) { return !SYS.includes(f.name); });
-    var sysShown = fieldDefs.filter(function (f) { return SYS.includes(f.name) && rec[f.name] !== undefined; });
+    var sysShown = fieldDefs.filter(function (f) { return SYS.includes(f.name) && recVal(rec, f) !== undefined; });
     var html = '';
 
     editable.forEach(function (f) {
-      var val  = rec[f.name] != null ? rec[f.name] : (f.defaultValue != null ? f.defaultValue : '');
+      var rv   = recVal(rec, f);
+      var val  = rv != null ? rv : (f.defaultValue != null ? f.defaultValue : '');
       var type = (f.dataType || f.type || 'STRING').toUpperCase();
       var long = type === 'STRING' && /description|note|comment/i.test(f.name);
       html += '<div class="co-fld' + (long ? ' full' : '') + '">' +
@@ -566,7 +567,7 @@
     if (!editable.length) {
       Object.keys(rec).forEach(function (k) {
         if (SYS.includes(k)) return;
-        html += '<div class="co-fld"><label class="co-fld-lbl">' + esc(k) + '</label>' +
+        html += '<div class="co-fld"><label class="co-fld-lbl">' + esc(colLabel(k)) + '</label>' +
           '<input class="co-fld-ctrl" data-field="' + esc(k) + '" type="text" value="' + esc(String(rec[k] == null ? '' : rec[k])) + '"></div>';
       });
     }
@@ -574,8 +575,9 @@
     if (sysShown.length) {
       html += '<div class="co-sys-sep"><div class="co-sys-sep-label">System Fields</div></div>';
       sysShown.forEach(function (f) {
+        var rv = recVal(rec, f);
         html += '<div class="co-fld"><label class="co-fld-lbl">' + esc(f.name) + '</label>' +
-          '<div class="co-fld-ro">' + esc(String(rec[f.name] == null ? '' : rec[f.name])) + '</div></div>';
+          '<div class="co-fld-ro">' + esc(String(rv == null ? '' : rv)) + '</div></div>';
       });
     }
 
@@ -665,8 +667,12 @@
   function exportCsv() {
     if (!filteredRecs.length) return;
     var cols = colOrder.filter(function (c) { return !hiddenCols.has(c); });
+    var header = cols.map(function (c) {
+      var name = colLabel(c);
+      return (name.indexOf(',') >= 0 || name.indexOf('"') >= 0) ? '"' + name.replace(/"/g, '""') + '"' : name;
+    }).join(',');
     CSV_UTILS.downloadCsv(selectedObj.name + '_records.csv',
-      [cols.join(',')].concat(filteredRecs.map(function (r) {
+      [header].concat(filteredRecs.map(function (r) {
         return cols.map(function (c) {
           var v = String(r[c] == null ? '' : r[c]);
           return (v.includes(',') || v.includes('"') || v.includes('\n')) ? '"' + v.replace(/"/g, '""') + '"' : v;
