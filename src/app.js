@@ -706,58 +706,75 @@
     var cols = colOrder.filter(function (c) { return !hiddenCols.has(c); });
     if (!cols.length) return;
 
-    // Build CSV content
+    // Build CSV
     var header = cols.map(function (c) {
       var name = colLabel(c);
       return (name.indexOf(',') >= 0 || name.indexOf('"') >= 0)
         ? '"' + name.replace(/"/g, '""') + '"' : name;
     }).join(',');
-
     var rows = filteredRecs.map(function (r) {
       return cols.map(function (c) {
-        // Use display label for selection-list values
-        var raw = r[c];
-        var v = String(displayValue(c, raw) == null ? '' : displayValue(c, raw));
+        var v = String(displayValue(c, r[c]) == null ? '' : displayValue(c, r[c]));
         return (v.indexOf(',') >= 0 || v.indexOf('"') >= 0 || v.indexOf('\n') >= 0)
           ? '"' + v.replace(/"/g, '""') + '"' : v;
       }).join(',');
     });
-
-    var csv = '\uFEFF' + [header].concat(rows).join('\n'); // BOM for Excel UTF-8
+    var csv = [header].concat(rows).join('\n');
     var filename = (selectedObj ? selectedObj.name : 'records') + '_export.csv';
 
-    try {
-      // Primary: Blob + object URL (works in most browsers)
-      var blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-      var url  = URL.createObjectURL(blob);
-      var a    = document.createElement('a');
-      a.href     = url;
-      a.download = filename;
-      a.style.display = 'none';
-      document.body.appendChild(a);
-      a.click();
-      setTimeout(function () {
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
-      }, 200);
-    } catch (e) {
-      // Fallback: data: URI (works in sandboxed iframes where Blob URLs are blocked)
-      try {
-        var dataUri = 'data:text/csv;charset=utf-8,' + encodeURIComponent(csv);
-        var a2 = document.createElement('a');
-        a2.href = dataUri;
-        a2.download = filename;
-        a2.style.display = 'none';
-        document.body.appendChild(a2);
-        a2.click();
-        setTimeout(function () { document.body.removeChild(a2); }, 200);
-      } catch (e2) {
-        // Last resort: open CSV in a new tab so the user can Save As
-        var w = window.open('', '_blank');
-        if (w) { w.document.write('<pre>' + csv.replace(/&/g,'&amp;').replace(/</g,'&lt;') + '</pre>'); }
-        else { alert('Could not download — please allow popups for this site.'); }
-      }
+    // The FSM Shell iframe has sandbox restrictions that block file downloads.
+    // Best approach: copy CSV to clipboard, with a fallback dialog.
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(csv).then(function () {
+        showExportSuccess(filename, csv, true);
+      }).catch(function () {
+        showExportSuccess(filename, csv, false);
+      });
+    } else {
+      showExportSuccess(filename, csv, false);
     }
+  }
+
+  function showExportSuccess(filename, csv, copied) {
+    // Show a modal with the CSV content so user can copy/save it
+    var ov = document.createElement('div');
+    ov.className = 'co-overlay';
+    ov.innerHTML =
+      '<div class="co-dialog" style="max-width:560px;width:96vw">' +
+        '<h3 style="margin-bottom:6px">Export: ' + esc(filename) + '</h3>' +
+        '<p style="margin-bottom:10px;font-size:12px;color:#4a5568">' +
+          (copied
+            ? '✓ CSV copied to clipboard! Paste into a .csv file or Excel.'
+            : 'Copy the CSV below and paste into a .csv file or Excel.') +
+        '</p>' +
+        '<textarea id="_csv-area" readonly style="width:100%;height:180px;font-family:monospace;' +
+          'font-size:11px;padding:8px;border:1px solid #d9dbe0;border-radius:6px;' +
+          'background:#f5f6f8;resize:vertical;color:#1d2129;outline:none">' +
+          esc(csv) +
+        '</textarea>' +
+        '<div class="co-dialog-btns" style="margin-top:12px">' +
+          '<button class="co-btn co-btn--ghost" id="_csv-copy">Copy CSV</button>' +
+          '<button class="co-btn co-btn--primary" id="_csv-close">Done</button>' +
+        '</div>' +
+      '</div>';
+    document.body.appendChild(ov);
+
+    var area = ov.querySelector('#_csv-area');
+    // Select all text in the textarea immediately
+    setTimeout(function () { area.focus(); area.select(); }, 50);
+
+    ov.querySelector('#_csv-copy').addEventListener('click', function () {
+      area.select();
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(csv).then(function () {
+          ov.querySelector('#_csv-copy').textContent = '✓ Copied!';
+        });
+      } else {
+        document.execCommand('copy');
+        ov.querySelector('#_csv-copy').textContent = '✓ Copied!';
+      }
+    });
+    ov.querySelector('#_csv-close').addEventListener('click', function () { ov.remove(); });
   }
 
   // ── Save bar / confirm ────────────────────────────────────────────────
