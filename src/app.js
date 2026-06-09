@@ -690,14 +690,64 @@
 
   function patchFsmApi() {
     if (!window.FSM_API) return;
-    var _q = FSM_API._query.bind(FSM_API);
+
+    // Clean reimplementation of _query: correct headers (no broken X-Client-ID),
+    // proper Authorization, and a fetch timeout so we fail fast instead of hanging.
     FSM_API._query = function (config, token, sql, dtos) {
-      var url = 'https://' + config.clusterHost + '/api/query/v1?account=' + encodeURIComponent(config.account) + '&company=' + encodeURIComponent(config.company) + '&dtos=' + encodeURIComponent(dtos);
-      var cid = DBG.startCallSync('POST', url, { 'Content-Type': 'application/json', 'X-Account-Name': config.account, 'X-Company-Name': config.company }, JSON.stringify({ query: sql }));
-      return _q(config, token, sql, dtos)
-        .then(function (r) { DBG.endCall(cid, 200, 'OK', r, null); return r; })
-        .catch(function (err) { var m = err.message.match(/\((\d+)\)/); DBG.endCall(cid, m ? +m[1] : 0, 'Error', null, err.message); throw err; });
+      var url = 'https://' + config.clusterHost + '/api/query/v1' +
+        '?account=' + encodeURIComponent(config.account) +
+        '&company=' + encodeURIComponent(config.company) +
+        '&dtos='    + encodeURIComponent(dtos);
+
+      var headers = {
+        'Authorization':    'Bearer ' + token,
+        'Content-Type':     'application/json',
+        'Accept':           'application/json',
+        'X-Account-Name':   config.account,
+        'X-Company-Name':   config.company,
+        'X-Client-Version': '1.0',
+      };
+      // Only send X-Client-ID if we actually have one (avoid literal "undefined")
+      if (config.clientId) headers['X-Client-ID'] = config.clientId;
+
+      var body = JSON.stringify({ query: sql });
+
+      // Log for debug panel (Authorization shown truncated)
+      var dispHeaders = {};
+      Object.keys(headers).forEach(function (k) {
+        dispHeaders[k] = (k === 'Authorization')
+          ? 'Bearer ' + String(token).substring(0, 16) + '…(' + String(token).length + ' chars)'
+          : headers[k];
+      });
+      var cid = DBG.startCallSync('POST', url, dispHeaders, body);
+
+      // Fetch with a 20s timeout
+      var controller = new AbortController();
+      var timer = setTimeout(function () { controller.abort(); }, 20000);
+
+      return fetch(url, { method: 'POST', headers: headers, body: body, signal: controller.signal })
+        .then(function (res) {
+          clearTimeout(timer);
+          return res.text().then(function (text) {
+            var parsed; try { parsed = JSON.parse(text); } catch (e) { parsed = text; }
+            if (!res.ok) {
+              DBG.endCall(cid, res.status, 'Error', parsed, 'HTTP ' + res.status + ': ' + text.substring(0, 300));
+              throw new Error('Query failed (' + res.status + '): ' + text.substring(0, 300));
+            }
+            DBG.endCall(cid, res.status, 'OK', parsed, null);
+            return parsed;
+          });
+        })
+        .catch(function (err) {
+          clearTimeout(timer);
+          var msg = err.name === 'AbortError'
+            ? 'Request timed out after 20s (no response from FSM API)'
+            : err.message;
+          DBG.endCall(cid, 0, 'Error', null, msg);
+          throw new Error(msg);
+        });
     };
+
     var _u = FSM_API.upsertRecord.bind(FSM_API);
     FSM_API.upsertRecord = function (config, token, objectName, record, fieldMetaMap, udoMetaId) {
       var url = 'https://' + config.clusterHost + '/api/data/v4/UdoValue?account=' + encodeURIComponent(config.account) + '&company=' + encodeURIComponent(config.company) + '&dtos=UdoValue.10';
