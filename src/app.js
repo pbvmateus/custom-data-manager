@@ -646,7 +646,17 @@
         navigateTo('/records');
         return loadRecords();
       })
-      .catch(function (err) { showSaveBar('err', '✗ ' + err.message); })
+      .catch(function (err) {
+        var msg = err.message || String(err);
+        // A 423 / CA-28 that survives forceUpdate is a real platform sync block
+        // (record has syncStatus BLOCKED from an ERP connector), not something
+        // the API client can override.
+        if (/\b423\b|CA-28|blocked/i.test(msg)) {
+          showSaveBar('err', '✗ This record is locked by FSM (sync in progress or ERP block). It can\'t be edited until FSM unblocks it.');
+        } else {
+          showSaveBar('err', '✗ ' + msg);
+        }
+      })
       .finally(function () { btn.removeAttribute('disabled'); });
   }
 
@@ -898,18 +908,18 @@
         .map(function (fieldId) { return { meta: { id: fieldId }, value: String(valuesById[fieldId]) }; });
 
       var isUpdate = !!existingId;
-      var body = { meta: { id: udoMetaId }, udfValues: udfValues };
-      if (isUpdate) {
-        body.id = existingId;
-        if (lastChanged != null) body.lastChanged = lastChanged;
-      }
+      // On UPDATE we use forceUpdate=true (below) to bypass the optimistic-lock
+      // / blocked state. With forceUpdate, lastChanged must be OMITTED — sending
+      // both a force flag and a version key conflicts and FSM keeps the block.
+      var body = isUpdate
+        ? { id: existingId, udfValues: udfValues }
+        : { meta: { id: udoMetaId }, udfValues: udfValues };
 
       var base = 'https://' + config.clusterHost + '/api/data/v4/UdoValue';
       var url = (isUpdate ? base + '/' + existingId : base) +
         '?account=' + encodeURIComponent(config.account) +
         '&company=' + encodeURIComponent(config.company) + '&dtos=UdoValue.10';
-      // forceUpdate=true tells FSM to overwrite even if the resource is
-      // locked/blocked (CA-28 / HTTP 423) due to sync or optimistic-lock state.
+      // forceUpdate=true tells FSM to overwrite without the optimistic-lock check.
       if (isUpdate) url += '&forceUpdate=true';
       var method = isUpdate ? 'PATCH' : 'POST';
 
