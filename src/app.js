@@ -103,10 +103,11 @@
     // Init ShellSDK
     const SHELL_SDK = ShellSdk.init(parent, '*');
 
-    var contextReceived = false;
+    var ctxReceived  = false;
+    var gotContext   = false;
+    var gotToken     = false;
 
-    // IMPORTANT: register ALL listeners BEFORE emitting any event.
-    // A fast Shell response can arrive before the listener is attached.
+    // ── Register ALL listeners BEFORE emitting ────────────────────────────
 
     SHELL_SDK.on(SHELL_EVENTS.ERROR, function (err) {
       console.error('[Custom Objects] Shell error:', err);
@@ -117,79 +118,92 @@
       console.log('[Custom Objects] Shell locale:', locale);
     });
 
-    // Context handler — fires when the Shell returns session token + env
+    // 1) REQUIRE_CONTEXT → gives us cloudHost / account / company.
+    //    NOTE: for EXTENSIONS the Shell does NOT return a token here.
+    //    The token must be requested separately via REQUIRE_AUTHENTICATION.
     SHELL_SDK.on(SHELL_EVENTS.Version1.REQUIRE_CONTEXT, function (ctx) {
-      contextReceived = true;
-
-      // ctx may arrive as a JSON string in some Shell versions — parse it
+      ctxReceived = true;
       if (typeof ctx === 'string') {
-        try { ctx = JSON.parse(ctx); } catch (e) { /* leave as-is */ }
+        try { ctx = JSON.parse(ctx); } catch (e) { /* ignore */ }
       }
 
-      authToken = (ctx.auth && ctx.auth.access_token) || ctx.authToken || null;
       apiConfig = {
         clusterHost: ctx.cloudHost,
         account:     ctx.account,
         company:     ctx.company,
       };
+      gotContext = true;
 
       DBG.setCtx(ctx);
-      console.log('[Custom Objects] Context received:', {
-        cloudHost: ctx.cloudHost,
-        account:   ctx.account,
-        company:   ctx.company,
-        user:      ctx.user,
-        hasToken:  !!authToken,
+      console.log('[Custom Objects] Context:', {
+        cloudHost: ctx.cloudHost, account: ctx.account,
+        company: ctx.company, user: ctx.user,
       });
 
-      // If the Shell didn't include a token, request one explicitly
-      if (!authToken) {
-        DBG.logError('No token in REQUIRE_CONTEXT — requesting via REQUIRE_AUTHENTICATION');
+      // A token may already be present (apps), use it if so
+      var t = (ctx.auth && ctx.auth.access_token) || ctx.authToken || null;
+      if (t) { authToken = t; gotToken = true; }
+
+      maybeStart();
+
+      // Extensions: explicitly request a restricted token
+      if (!gotToken) {
         SHELL_SDK.emit(SHELL_EVENTS.Version1.REQUIRE_AUTHENTICATION, { response_type: 'token' });
-        return;
       }
-      startApp();
     });
 
-    // Some Shell versions deliver the token via REQUIRE_AUTHENTICATION
+    // 2) REQUIRE_AUTHENTICATION → gives us the access_token for the extension
     SHELL_SDK.on(SHELL_EVENTS.Version1.REQUIRE_AUTHENTICATION, function (auth) {
       if (typeof auth === 'string') {
-        try { auth = JSON.parse(auth); } catch (e) { /* leave as-is */ }
+        try { auth = JSON.parse(auth); } catch (e) { /* ignore */ }
       }
-      var token = (auth && auth.access_token) || (auth && auth.auth && auth.auth.access_token) || null;
-      if (token) {
-        authToken = token;
-        DBG.logError('Token received via REQUIRE_AUTHENTICATION');
-        if (apiConfig && apiConfig.clusterHost) startApp();
+      var t = (auth && auth.access_token) ||
+              (auth && auth.auth && auth.auth.access_token) || null;
+      if (t) {
+        authToken = t;
+        gotToken = true;
+        DBG.logError('Token received via REQUIRE_AUTHENTICATION (expires_in=' + (auth.expires_in || '?') + ')');
+        maybeStart();
+      } else {
+        DBG.logError('REQUIRE_AUTHENTICATION returned no access_token: ' + JSON.stringify(auth));
       }
     });
 
-    // Now emit — all listeners are in place
+    // Start only once we have BOTH the env context AND a token
+    function maybeStart() {
+      if (gotContext && gotToken && apiConfig && apiConfig.clusterHost && authToken) {
+        document.getElementById('loading-overlay').style.display = 'none';
+        bindUI();
+        loadObjects();
+      }
+    }
+
+    // ── Now emit (listeners are in place) ─────────────────────────────────
     SHELL_SDK.emit(SHELL_EVENTS.Version1.GET_STORAGE_ITEM, 'Cockpit_SelectedLocale');
+
+    // For extensions, REQUIRE_CONTEXT takes only clientIdentifier (per SAP sample).
+    // Do NOT pass auth here — the token comes from REQUIRE_AUTHENTICATION.
     SHELL_SDK.emit(SHELL_EVENTS.Version1.REQUIRE_CONTEXT, {
       clientIdentifier: 'fsm-custom-objects-manager',
-      auth: { response_type: 'token' },
     });
 
-    // Diagnostic: if no context after 8s, surface it instead of hanging forever
+    // Diagnostic timeout
     setTimeout(function () {
-      if (!contextReceived) {
+      if (!gotContext || !gotToken) {
         document.getElementById('load-msg').textContent =
-          'No response from Shell. Open the 🐛 Debug panel (bottom-right) for details.';
+          'Shell handshake incomplete. Open the 🐛 Debug panel (bottom-right).';
         DBG.setCtx({
-          _status:  'NO_CONTEXT_RESPONSE',
-          _message: 'REQUIRE_CONTEXT was emitted but the Shell never responded within 8 seconds.',
-          _emitted: 'clientIdentifier=fsm-custom-objects-manager, auth.response_type=token',
-          _hint:    'Extension is embedded but Shell returned no context. Verify the clientIdentifier matches a registered OAuth client in FSM Admin → Account → Clients.',
+          _status:      'HANDSHAKE_INCOMPLETE',
+          _gotContext:  gotContext,
+          _gotToken:    gotToken,
+          _clusterHost: apiConfig ? apiConfig.clusterHost : null,
+          _message:     'REQUIRE_CONTEXT / REQUIRE_AUTHENTICATION did not both complete within 8s.',
+          _hint:        gotContext && !gotToken
+            ? 'Got env context but NO token. REQUIRE_AUTHENTICATION did not return access_token — check the extension is allowed to request tokens.'
+            : 'No context response at all from the Shell.',
         });
       }
     }, 8000);
-
-    function startApp() {
-      document.getElementById('loading-overlay').style.display = 'none';
-      bindUI();
-      loadObjects();
-    }
 
   } else {
     // Standalone (dev) mode — show own nav and top bar
