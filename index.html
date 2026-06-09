@@ -1,33 +1,29 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Custom Objects Manager</title>
-  <!-- FSM Shell SDK — loaded from unpkg as per SAP documentation -->
   <script src="https://unpkg.com/fsm-shell/release/fsm-shell-client.js"></script>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
     :root {
-      --blue:      #0070F2;
-      --blue-dk:   #0057C2;
-      --blue-lt:   #E8F1FF;
-      --green:     #107E3E;
-      --green-bg:  #F1FAF5;
-      --red:       #BB0000;
-      --red-bg:    #FFEAEA;
-      --bg:        #F3F4F6;
-      --surface:   #FFFFFF;
-      --border:    #D9DBE0;
-      --border2:   #C0C3CC;
-      --text:      #1D2129;
-      --text2:     #4A5568;
-      --muted:     #9099AA;
-      --r:         6px;
-      --r-sm:      4px;
-      --shadow:    0 2px 8px rgba(0,0,0,.08);
-      --shadow-lg: 0 8px 28px rgba(0,0,0,.14);
+      --sap-blue:     #0070F2;
+      --sap-blue-dk:  #0057C2;
+      --sap-blue-lt:  #E8F1FF;
+      --sap-green:    #107E3E;
+      --sap-green-bg: #F1FAF5;
+      --sap-red:      #BB0000;
+      --sap-red-bg:   #FFEAEA;
+      --bg:           #F3F4F6;
+      --surface:      #FFFFFF;
+      --border:       #D9DBE0;
+      --border2:      #C0C3CC;
+      --text:         #1D2129;
+      --text2:        #4A5568;
+      --muted:        #9099AA;
+      --r:            6px;
     }
 
     html, body {
@@ -37,135 +33,157 @@
       background: var(--bg); overflow: hidden;
     }
 
-    /* ── Loading ──────────────────────────────────────────────────── */
-    #loadingScreen {
-      position: fixed; inset: 0;
+    /* ── Loading ─────────────────────────────────────────────── */
+    #loading {
+      position: fixed; inset: 0; z-index: 99;
       display: flex; flex-direction: column;
       align-items: center; justify-content: center;
-      background: var(--surface); gap: 14px; z-index: 100;
+      background: var(--surface); gap: 14px;
     }
-    .load-logo { width: 52px; height: 52px; background: var(--blue); border-radius: 12px; display: flex; align-items: center; justify-content: center; }
-    #loadingScreen h2 { font-size: 18px; font-weight: 600; }
-    #loadingScreen p  { font-size: 13px; color: var(--muted); }
+    #loading .icon {
+      width: 52px; height: 52px;
+      background: var(--sap-blue); border-radius: 12px;
+      display: flex; align-items: center; justify-content: center;
+    }
+    #loading h2  { font-size: 18px; font-weight: 600; }
+    #loading p   { font-size: 12px; color: var(--muted); }
 
-    /* ── App ──────────────────────────────────────────────────────── */
+    /* ── App shell ───────────────────────────────────────────── */
     #app { display: none; width: 100%; height: 100%; flex-direction: column; }
-    #app.ready { display: flex; }
+    #app.show { display: flex; }
 
-    /* Connection badge — subtle status at top */
-    .conn-bar {
-      display: flex; align-items: center; gap: 6px;
-      padding: 6px 16px;
-      background: var(--surface); border-bottom: 1px solid var(--border);
-      font-size: 11px; color: var(--muted); flex-shrink: 0;
+    /* ── Views — full-screen stack ───────────────────────────── */
+    .view-stack { flex: 1; position: relative; overflow: hidden; }
+    .view {
+      position: absolute; inset: 0;
+      display: none; flex-direction: column;
+      background: var(--bg);
     }
-    .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); flex-shrink: 0; transition: background .3s; }
-    .dot.ok   { background: var(--green); }
-    .dot.err  { background: var(--red); }
-    .dot.busy { background: #E9730C; animation: blink 1.1s ease infinite; }
-    @keyframes blink { 0%,100%{opacity:1} 50%{opacity:.2} }
+    .view.active { display: flex; }
 
-    /* ── Panels — full-height, stacked ───────────────────────────── */
-    .panels { flex: 1; position: relative; overflow: hidden; }
-    .panel { position: absolute; inset: 0; display: none; flex-direction: column; background: var(--bg); }
-    .panel.show { display: flex; }
-
-    /* ── Panel header ─────────────────────────────────────────────── */
-    .pnl-hdr {
-      display: flex; align-items: center; justify-content: space-between;
-      padding: 10px 16px; background: var(--surface);
-      border-bottom: 1px solid var(--border); flex-shrink: 0; gap: 10px;
-      min-height: 48px;
+    /* ── Shared toolbar ──────────────────────────────────────── */
+    .toolbar {
+      display: flex; align-items: center;
+      justify-content: space-between;
+      padding: 0 14px; height: 48px;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0; gap: 10px;
     }
-    .pnl-title-row { display: flex; align-items: baseline; gap: 8px; }
-    .pnl-title { font-size: 16px; font-weight: 700; }
-    .count-badge { font-size: 10px; color: var(--muted); background: var(--bg); border: 1px solid var(--border); border-radius: 10px; padding: 1px 8px; }
-    .pnl-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+    .toolbar-left  { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; }
+    .toolbar-right { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+    .toolbar-title { font-size: 15px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .toolbar-badge {
+      font-size: 10px; color: var(--muted);
+      background: var(--bg); border: 1px solid var(--border);
+      border-radius: 10px; padding: 1px 8px;
+      white-space: nowrap;
+    }
 
-    /* ── Buttons ──────────────────────────────────────────────────── */
+    /* ── Buttons ─────────────────────────────────────────────── */
     .btn {
       display: inline-flex; align-items: center; gap: 5px;
-      padding: 5px 12px; border-radius: var(--r-sm);
-      font-size: 12px; font-weight: 500; cursor: pointer;
-      border: 1px solid transparent; transition: all .1s;
+      padding: 5px 12px; border-radius: 4px;
+      font-size: 12px; font-weight: 500;
+      cursor: pointer; border: 1px solid transparent;
       white-space: nowrap; font-family: inherit;
+      transition: background .1s, border-color .1s;
     }
-    .btn:active { opacity: .85; }
-    .btn-primary { background: var(--blue); color: #fff; border-color: var(--blue); }
-    .btn-primary:hover  { background: var(--blue-dk); }
-    .btn-ghost   { background: var(--surface); color: var(--text2); border-color: var(--border2); }
-    .btn-ghost:hover    { border-color: var(--blue); color: var(--blue); }
-    .btn-danger  { background: var(--red-bg); color: var(--red); }
+    .btn-primary  { background: var(--sap-blue);   color: #fff;            border-color: var(--sap-blue); }
+    .btn-primary:hover  { background: var(--sap-blue-dk); }
+    .btn-ghost    { background: var(--surface);     color: var(--text2);    border-color: var(--border2); }
+    .btn-ghost:hover    { border-color: var(--sap-blue); color: var(--sap-blue); }
+    .btn-danger   { background: var(--sap-red-bg);  color: var(--sap-red); }
     .btn-danger:hover   { background: #ffd6d6; }
     .btn-icon {
       display: inline-flex; align-items: center; justify-content: center;
-      width: 28px; height: 28px; border-radius: var(--r-sm);
+      width: 28px; height: 28px; border-radius: 4px;
       border: 1px solid var(--border); background: var(--surface);
-      color: var(--muted); cursor: pointer; transition: all .1s;
+      color: var(--muted); cursor: pointer;
     }
-    .btn-icon:hover { color: var(--blue); border-color: var(--blue); background: var(--blue-lt); }
+    .btn-icon:hover { color: var(--sap-blue); border-color: var(--sap-blue); background: var(--sap-blue-lt); }
 
-    /* ── Spinner ──────────────────────────────────────────────────── */
-    .spinner { width: 16px; height: 16px; flex-shrink: 0; border: 2px solid var(--border); border-top-color: var(--blue); border-radius: 50%; animation: spin .65s linear infinite; }
+    /* ── Spinner ─────────────────────────────────────────────── */
+    .spinner {
+      width: 16px; height: 16px; flex-shrink: 0;
+      border: 2px solid var(--border); border-top-color: var(--sap-blue);
+      border-radius: 50%; animation: spin .65s linear infinite;
+    }
     @keyframes spin { to { transform: rotate(360deg); } }
-    .loading-row { display: flex; align-items: center; gap: 10px; padding: 16px; color: var(--muted); font-size: 12px; }
-
-    /* ── PANEL: Object list ───────────────────────────────────────── */
-    .search-bar {
-      padding: 10px 14px; background: var(--surface);
-      border-bottom: 1px solid var(--border); flex-shrink: 0;
-      position: relative;
+    .loading-row {
+      display: flex; align-items: center; gap: 10px;
+      padding: 16px; color: var(--muted); font-size: 12px;
     }
-    .search-bar svg { position: absolute; left: 23px; top: 50%; transform: translateY(-50%); color: var(--muted); pointer-events: none; }
+
+    /* ─────────────────────────────────────────────────────────
+       VIEW 1: Object list
+    ───────────────────────────────────────────────────────── */
+    .search-bar {
+      padding: 8px 14px; background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0; position: relative;
+    }
+    .search-bar svg {
+      position: absolute; left: 23px; top: 50%;
+      transform: translateY(-50%);
+      color: var(--muted); pointer-events: none;
+    }
     .search-bar input {
       width: 100%; padding: 7px 10px 7px 30px;
       background: var(--bg); border: 1px solid var(--border);
-      border-radius: var(--r-sm); font-size: 12px; color: var(--text); outline: none;
+      border-radius: 4px; font-size: 12px; color: var(--text); outline: none;
+      font-family: inherit;
     }
-    .search-bar input:focus { border-color: var(--blue); box-shadow: 0 0 0 2px var(--blue-lt); }
+    .search-bar input:focus {
+      border-color: var(--sap-blue);
+      box-shadow: 0 0 0 2px var(--sap-blue-lt);
+    }
     .search-bar input::placeholder { color: var(--muted); }
 
-    .obj-scroll { flex: 1; overflow-y: auto; }
-    .obj-scroll::-webkit-scrollbar { width: 5px; }
-    .obj-scroll::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 4px; }
+    .list-scroll { flex: 1; overflow-y: auto; }
+    .list-scroll::-webkit-scrollbar { width: 5px; }
+    .list-scroll::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 4px; }
 
     .obj-item {
-      display: flex; align-items: center; gap: 10px;
-      padding: 10px 14px; background: var(--surface);
+      display: flex; align-items: center; gap: 12px;
+      padding: 12px 16px;
+      background: var(--surface);
       border-bottom: 1px solid var(--border);
       cursor: pointer; transition: background .1s;
     }
-    .obj-item:hover { background: var(--blue-lt); }
-    .obj-item.active { background: var(--blue-lt); }
+    .obj-item:hover { background: #f0f4ff; }
     .obj-avatar {
-      width: 36px; height: 36px; border-radius: 8px;
-      background: var(--blue); color: #fff;
-      font-size: 11px; font-weight: 700;
+      width: 38px; height: 38px; border-radius: 8px;
+      background: var(--sap-blue); color: #fff;
+      font-size: 12px; font-weight: 700;
       display: flex; align-items: center; justify-content: center;
-      flex-shrink: 0;
+      flex-shrink: 0; letter-spacing: .5px;
     }
-    .obj-text  { flex: 1; min-width: 0; }
-    .obj-name  { font-size: 13px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .obj-sub   { font-size: 10px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 1px; }
-    .obj-chevron { color: var(--muted); flex-shrink: 0; }
+    .obj-info   { flex: 1; min-width: 0; }
+    .obj-name   { font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .obj-id     { font-size: 10px; color: var(--muted); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .obj-arrow  { color: var(--muted); flex-shrink: 0; }
 
-    .list-empty { padding: 24px 16px; font-size: 12px; color: var(--muted); }
-    .list-error { padding: 12px 16px; font-size: 11px; color: var(--red); }
+    .list-msg   { padding: 20px 16px; font-size: 12px; color: var(--muted); }
+    .list-err   { padding: 12px 16px; font-size: 12px; color: var(--sap-red); background: var(--sap-red-bg); }
 
-    /* ── PANEL: Records ───────────────────────────────────────────── */
-    .filter-bar {
+    /* ─────────────────────────────────────────────────────────
+       VIEW 2: Records table
+    ───────────────────────────────────────────────────────── */
+    .filter-row {
       display: flex; align-items: center; gap: 8px;
       padding: 8px 14px; background: var(--surface);
       border-bottom: 1px solid var(--border); flex-shrink: 0;
     }
-    .filter-wrap { position: relative; flex: 1; max-width: 300px; }
-    .filter-wrap svg { position: absolute; left: 8px; top: 50%; transform: translateY(-50%); color: var(--muted); pointer-events: none; }
+    .filter-row-wrap { position: relative; flex: 1; max-width: 320px; }
+    .filter-row-wrap svg { position: absolute; left: 8px; top: 50%; transform: translateY(-50%); color: var(--muted); pointer-events: none; }
     .filter-input {
       width: 100%; padding: 5px 8px 5px 26px;
       background: var(--bg); border: 1px solid var(--border);
-      border-radius: var(--r-sm); font-size: 12px; color: var(--text); outline: none;
+      border-radius: 4px; font-size: 12px; color: var(--text);
+      outline: none; font-family: inherit;
     }
-    .filter-input:focus { border-color: var(--blue); box-shadow: 0 0 0 2px var(--blue-lt); }
+    .filter-input:focus { border-color: var(--sap-blue); box-shadow: 0 0 0 2px var(--sap-blue-lt); }
     .filter-input::placeholder { color: var(--muted); }
 
     .table-wrap { flex: 1; overflow: auto; position: relative; }
@@ -175,226 +193,349 @@
     table.grid { width: 100%; border-collapse: collapse; font-size: 12px; table-layout: fixed; }
     table.grid thead { position: sticky; top: 0; z-index: 5; }
     table.grid th {
-      background: var(--bg); border-bottom: 1.5px solid var(--border2);
-      border-right: 1px solid var(--border); padding: 0;
-      font-weight: 600; color: var(--text2); white-space: nowrap;
-      text-align: left; user-select: none; position: relative;
+      background: var(--bg); padding: 0;
+      border-bottom: 1.5px solid var(--border2);
+      border-right: 1px solid var(--border);
+      font-weight: 600; color: var(--text2);
+      white-space: nowrap; text-align: left;
+      user-select: none; position: relative;
     }
     table.grid th:last-child { border-right: none; }
-    .th-inner { display: flex; align-items: center; gap: 4px; padding: 7px 10px; cursor: pointer; }
-    .th-inner:hover { color: var(--blue); }
+
+    .th-inner {
+      display: flex; align-items: center; gap: 4px;
+      padding: 7px 10px; cursor: pointer;
+    }
+    .th-inner:hover { color: var(--sap-blue); }
     .th-label { flex: 1; overflow: hidden; text-overflow: ellipsis; }
-    .sort-arrows { display: flex; flex-direction: column; gap: 1px; opacity: .3; flex-shrink: 0; }
-    .sort-arrows.asc  .arr-up   { opacity: 1; }
-    .sort-arrows.desc .arr-down { opacity: 1; }
-    .resizer { position: absolute; right: 0; top: 0; width: 5px; height: 100%; cursor: col-resize; z-index: 6; }
-    .resizer:hover, .resizer.active { background: var(--blue); opacity: .6; }
-    .grip { cursor: grab; color: var(--muted); opacity: .35; flex-shrink: 0; padding: 0 2px; }
-    .grip:hover { opacity: .8; }
-    th.dragging { opacity: .3; background: var(--blue-lt) !important; }
-    th.drag-over { border-left: 2px solid var(--blue); }
+
+    .sort-ico { display: flex; flex-direction: column; gap: 1px; opacity: .3; flex-shrink: 0; }
+    .sort-ico.asc  .arr-u { opacity: 1; }
+    .sort-ico.desc .arr-d { opacity: 1; }
+
+    .col-resizer {
+      position: absolute; right: 0; top: 0;
+      width: 5px; height: 100%; cursor: col-resize; z-index: 6;
+    }
+    .col-resizer:hover, .col-resizer.on { background: var(--sap-blue); opacity: .6; }
+
+    .drag-grip { cursor: grab; color: var(--muted); opacity: .3; flex-shrink: 0; padding: 0 2px; }
+    .drag-grip:hover { opacity: .8; }
+    th.is-dragging  { opacity: .3; background: var(--sap-blue-lt) !important; }
+    th.drag-target  { border-left: 2px solid var(--sap-blue); }
+
     table.grid td {
-      padding: 7px 10px; border-bottom: 1px solid var(--border);
+      padding: 7px 10px;
+      border-bottom: 1px solid var(--border);
       border-right: 1px solid var(--border);
       white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-      vertical-align: middle;
     }
     table.grid td:last-child { border-right: none; }
     table.grid tbody tr { cursor: pointer; transition: background .08s; }
-    table.grid tbody tr:hover { background: var(--blue-lt); }
+    table.grid tbody tr:hover { background: var(--sap-blue-lt); }
     table.grid tbody tr:last-child td { border-bottom: none; }
-    .badge-bool-t { color: var(--green); background: var(--green-bg); padding: 1px 7px; border-radius: 10px; font-size: 11px; font-weight: 500; }
-    .badge-bool-f { color: var(--muted); background: var(--bg); padding: 1px 7px; border-radius: 10px; font-size: 11px; }
-    .cell-nil     { color: var(--muted); font-style: italic; font-size: 11px; }
-    .table-empty  { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; color: var(--muted); }
-    .table-empty p { font-size: 13px; }
 
-    /* ── PANEL: Detail ────────────────────────────────────────────── */
-    .detail-scroll { flex: 1; overflow-y: auto; padding: 16px 20px 28px; }
-    .detail-scroll::-webkit-scrollbar { width: 5px; }
-    .detail-scroll::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 4px; }
-    .detail-hero { display: flex; align-items: center; gap: 10px; margin-bottom: 20px; }
-    .detail-hero h2 { font-size: 17px; font-weight: 700; }
-    .hero-badge { font-size: 10px; font-weight: 700; letter-spacing: .5px; padding: 2px 8px; border-radius: 10px; background: var(--blue-lt); color: var(--blue); }
-    .hero-badge.existing { background: var(--green-bg); color: var(--green); }
+    .cell-t   { color: var(--sap-green); background: var(--sap-green-bg); padding: 1px 7px; border-radius: 10px; font-size: 11px; font-weight: 500; }
+    .cell-f   { color: var(--muted); background: var(--bg); padding: 1px 7px; border-radius: 10px; font-size: 11px; }
+    .cell-nil { color: var(--muted); font-style: italic; font-size: 11px; }
+
+    .tbl-empty {
+      position: absolute; inset: 0;
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      gap: 8px; color: var(--muted);
+    }
+    .tbl-empty p { font-size: 13px; }
+
+    /* ─────────────────────────────────────────────────────────
+       VIEW 3: Record detail / form
+    ───────────────────────────────────────────────────────── */
+    .detail-body { flex: 1; overflow-y: auto; padding: 16px 20px 32px; }
+    .detail-body::-webkit-scrollbar { width: 5px; }
+    .detail-body::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 4px; }
+
+    .rec-hero { display: flex; align-items: center; gap: 10px; margin-bottom: 20px; }
+    .rec-hero h2 { font-size: 17px; font-weight: 700; }
+    .rec-badge {
+      font-size: 10px; font-weight: 700; letter-spacing: .5px;
+      padding: 2px 8px; border-radius: 10px;
+    }
+    .rec-badge.is-new      { background: var(--sap-blue-lt); color: var(--sap-blue); }
+    .rec-badge.is-existing { background: var(--sap-green-bg); color: var(--sap-green); }
+
     .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px 20px; }
     .form-grid .full { grid-column: 1 / -1; }
-    .field-wrap { display: flex; flex-direction: column; gap: 4px; }
-    .field-lbl { font-size: 11px; font-weight: 600; color: var(--text2); display: flex; align-items: center; gap: 4px; }
-    .req-star  { color: var(--red); font-size: 10px; }
-    .type-tag  { margin-left: auto; font-size: 10px; font-weight: 400; color: var(--muted); background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 1px 6px; }
-    .field-ctrl {
+
+    .fld { display: flex; flex-direction: column; gap: 4px; }
+    .fld-lbl {
+      font-size: 11px; font-weight: 600; color: var(--text2);
+      display: flex; align-items: center; gap: 4px;
+    }
+    .fld-req  { color: var(--sap-red); font-size: 10px; }
+    .fld-type {
+      margin-left: auto; font-size: 10px; color: var(--muted);
+      background: var(--bg); border: 1px solid var(--border);
+      border-radius: 8px; padding: 1px 6px; font-weight: 400;
+    }
+
+    .fld-ctrl {
       padding: 7px 10px; font-size: 12px; color: var(--text);
-      border: 1.5px solid var(--border); border-radius: var(--r-sm);
-      background: var(--surface); outline: none; font-family: inherit; width: 100%;
+      border: 1.5px solid var(--border); border-radius: 4px;
+      background: var(--surface); outline: none;
+      font-family: inherit; width: 100%;
       transition: border-color .12s, box-shadow .12s;
     }
-    .field-ctrl:focus { border-color: var(--blue); box-shadow: 0 0 0 2px var(--blue-lt); }
-    .field-ctrl:disabled { background: var(--bg); color: var(--muted); cursor: not-allowed; }
-    textarea.field-ctrl { resize: vertical; min-height: 72px; line-height: 1.5; }
-    select.field-ctrl { cursor: pointer; }
-    .field-ctrl[type="checkbox"] { width: 16px; height: 16px; cursor: pointer; accent-color: var(--blue); padding: 0; }
+    .fld-ctrl:focus { border-color: var(--sap-blue); box-shadow: 0 0 0 2px var(--sap-blue-lt); }
+    .fld-ctrl:disabled { background: var(--bg); color: var(--muted); cursor: not-allowed; }
+    textarea.fld-ctrl { resize: vertical; min-height: 68px; line-height: 1.5; }
+    select.fld-ctrl   { cursor: pointer; }
+    .fld-ctrl[type="checkbox"] { width: 16px; height: 16px; cursor: pointer; accent-color: var(--sap-blue); padding: 0; }
+
     .bool-row { display: flex; align-items: center; gap: 8px; padding: 6px 0; }
     .bool-row span { font-size: 12px; color: var(--text2); }
-    .field-ro { padding: 7px 10px; background: var(--bg); border: 1.5px solid var(--border); border-radius: var(--r-sm); font-size: 12px; color: var(--muted); word-break: break-all; min-height: 34px; }
-    .sys-divider { grid-column: 1/-1; border-top: 1px solid var(--border); padding-top: 12px; margin-top: 4px; }
-    .sys-label { font-size: 10px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .6px; margin-bottom: 10px; }
-    .save-bar { padding: 10px 16px; font-size: 12px; border-top: 1px solid var(--border); display: flex; align-items: center; gap: 8px; flex-shrink: 0; animation: fadeUp .2s ease; }
-    .save-bar.ok  { background: var(--green-bg); color: var(--green); }
-    .save-bar.err { background: var(--red-bg);   color: var(--red); }
-    @keyframes fadeUp { from{opacity:0;transform:translateY(4px)} to{opacity:1;transform:translateY(0)} }
 
-    /* ── Confirm overlay ──────────────────────────────────────────── */
-    .overlay { position: fixed; inset: 0; background: rgba(0,0,0,.4); z-index: 200; display: flex; align-items: center; justify-content: center; }
-    .dialog { background: var(--surface); border-radius: var(--r); box-shadow: var(--shadow-lg); padding: 22px 26px; max-width: 300px; width: 100%; }
+    .fld-ro {
+      padding: 7px 10px; background: var(--bg);
+      border: 1.5px solid var(--border); border-radius: 4px;
+      font-size: 12px; color: var(--muted);
+      word-break: break-all; min-height: 34px;
+    }
+
+    .sys-sep { grid-column: 1/-1; border-top: 1px solid var(--border); padding-top: 12px; margin-top: 4px; }
+    .sys-sep-label {
+      font-size: 10px; font-weight: 700; color: var(--muted);
+      text-transform: uppercase; letter-spacing: .6px; margin-bottom: 10px;
+    }
+
+    .save-bar {
+      padding: 10px 16px; font-size: 12px;
+      border-top: 1px solid var(--border);
+      display: flex; align-items: center; gap: 8px;
+      flex-shrink: 0;
+    }
+    .save-bar.ok  { background: var(--sap-green-bg); color: var(--sap-green); }
+    .save-bar.err { background: var(--sap-red-bg);   color: var(--sap-red); }
+
+    /* ── Confirm overlay ─────────────────────────────────────── */
+    .overlay {
+      position: fixed; inset: 0;
+      background: rgba(0,0,0,.4); z-index: 200;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .dialog {
+      background: var(--surface); border-radius: var(--r);
+      box-shadow: 0 8px 28px rgba(0,0,0,.2);
+      padding: 22px 26px; max-width: 300px; width: 92%;
+    }
     .dialog h3 { font-size: 14px; font-weight: 700; margin-bottom: 8px; }
     .dialog p  { font-size: 12px; color: var(--text2); margin-bottom: 18px; line-height: 1.6; }
-    .dialog-acts { display: flex; gap: 8px; justify-content: flex-end; }
+    .dialog-btns { display: flex; gap: 8px; justify-content: flex-end; }
+
+    /* ── Debug overlay ───────────────────────────────────────── */
+    #dbg-btn {
+      position: fixed; bottom: 10px; right: 10px; z-index: 9000;
+      background: #1D2129; color: #00D9A3;
+      border: none; padding: 5px 10px; border-radius: 4px;
+      font-size: 11px; font-family: monospace; cursor: pointer;
+    }
+    #dbg-panel {
+      position: fixed; bottom: 36px; right: 0; z-index: 8999;
+      width: min(700px, 98vw); max-height: 60vh;
+      background: #1D2129; color: #E2E8F0;
+      font-family: monospace; font-size: 11px;
+      border-top: 2px solid #00D9A3; border-left: 2px solid #00D9A3;
+      border-radius: 6px 0 0 0;
+      display: none; flex-direction: column;
+    }
+    #dbg-panel.open { display: flex; }
+    #dbg-bar {
+      display: flex; align-items: center; padding: 5px 10px;
+      background: #111418; border-bottom: 1px solid #2D3748;
+      gap: 8px; flex-shrink: 0;
+    }
+    #dbg-bar span { flex: 1; color: #00D9A3; font-weight: 700; font-size: 11px; }
+    #dbg-bar button {
+      background: none; border: 1px solid #4A5568; color: #A0AEC0;
+      padding: 2px 7px; border-radius: 3px; font-size: 10px;
+      cursor: pointer; font-family: inherit;
+    }
+    #dbg-log { flex: 1; overflow-y: auto; padding: 8px; }
+    #dbg-log::-webkit-scrollbar { width: 4px; }
+    #dbg-log::-webkit-scrollbar-thumb { background: #4A5568; border-radius: 3px; }
+    .de { margin-bottom: 8px; border: 1px solid #2D3748; border-radius: 4px; overflow: hidden; }
+    .de-hdr {
+      display: flex; align-items: center; gap: 6px;
+      padding: 4px 8px; background: #2D3748; cursor: pointer;
+    }
+    .de-hdr:hover { background: #374151; }
+    .dm { font-weight: 700; font-size: 10px; padding: 1px 5px; border-radius: 3px; }
+    .dm.POST   { background: #2B6CB0; color: #BEE3F8; }
+    .dm.DELETE { background: #742A2A; color: #FEB2B2; }
+    .ds { font-size: 10px; padding: 1px 5px; border-radius: 3px; }
+    .ds.ok  { background: #22543D; color: #9AE6B4; }
+    .ds.err { background: #742A2A; color: #FEB2B2; }
+    .ds.pend { background: #744210; color: #FAF089; }
+    .de-url { flex: 1; color: #90CDF4; font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .de-ms  { font-size: 10px; color: #718096; flex-shrink: 0; }
+    .de-body { padding: 8px; display: none; }
+    .de-body.open { display: block; }
+    .de-sec { margin-bottom: 6px; }
+    .de-sec-lbl { color: #F6AD55; font-size: 10px; font-weight: 700; margin-bottom: 3px; }
+    .de-pre {
+      background: #111418; padding: 6px 8px; border-radius: 3px;
+      white-space: pre-wrap; word-break: break-all;
+      color: #CBD5E0; font-size: 10px; max-height: 150px; overflow-y: auto;
+      border: 1px solid #2D3748;
+    }
+    .ctx-block {
+      margin-bottom: 8px; border: 1px solid #2D3748; border-radius: 4px;
+      background: #111418; padding: 8px;
+    }
+    .ctx-lbl { color: #F6AD55; font-size: 10px; font-weight: 700; margin-bottom: 4px; }
+    .dbg-empty { color: #4A5568; font-size: 11px; padding: 12px; text-align: center; }
   </style>
 </head>
 <body>
 
-  <!-- Loading -->
-  <div id="loadingScreen">
-    <div class="load-logo">
-      <svg width="28" height="28" viewBox="0 0 28 28" fill="none">
-        <path d="M7 10h14M7 14h10M7 18h12" stroke="white" stroke-width="2" stroke-linecap="round"/>
-      </svg>
-    </div>
-    <h2>Custom Objects Manager</h2>
-    <p id="loadMsg">Connecting to SAP FSM Shell…</p>
+<!-- Loading screen -->
+<div id="loading">
+  <div class="icon">
+    <svg width="28" height="28" viewBox="0 0 28 28" fill="none">
+      <path d="M6 9h16M6 14h12M6 19h14" stroke="white" stroke-width="2" stroke-linecap="round"/>
+    </svg>
   </div>
+  <h2>Custom Objects Manager</h2>
+  <p id="load-msg">Connecting to SAP FSM Shell…</p>
+</div>
 
-  <!-- App -->
-  <div id="app">
+<!-- Main app -->
+<div id="app">
+  <div class="view-stack">
 
-    <!-- Connection status strip -->
-    <div class="conn-bar">
-      <span class="dot" id="connDot"></span>
-      <span id="connLabel">Initialising…</span>
+    <!-- ── VIEW 1: Object list ──────────────────────────────── -->
+    <div class="view active" id="view-list">
+      <div class="toolbar">
+        <div class="toolbar-left">
+          <span class="toolbar-title">Custom Objects</span>
+        </div>
+        <div class="toolbar-right">
+          <button class="btn-icon" id="btn-refresh" title="Refresh">
+            <svg width="13" height="13" viewBox="0 0 14 14" fill="none">
+              <path d="M12.5 7A5.5 5.5 0 1 1 7 1.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+              <path d="M7 1.5l2-2M7 1.5l2 2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+            </svg>
+          </button>
+        </div>
+      </div>
+
+      <div class="search-bar">
+        <svg width="13" height="13" viewBox="0 0 14 14" fill="none">
+          <circle cx="6" cy="6" r="4.5" stroke="currentColor" stroke-width="1.4"/>
+          <path d="M9.5 9.5L13 13" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+        </svg>
+        <input id="obj-search" type="text" placeholder="Search custom objects…" autocomplete="off" spellcheck="false"/>
+      </div>
+
+      <div class="list-scroll" id="obj-list">
+        <div class="loading-row"><div class="spinner"></div>Loading objects…</div>
+      </div>
     </div>
 
-    <!-- Panel container — Shell navigation drives which panel is visible -->
-    <div class="panels">
-
-      <!-- ── PANEL 1: Object list (home) ──────────────────────────── -->
-      <div class="panel show" id="panelList">
-        <div class="pnl-hdr">
-          <div class="pnl-title-row">
-            <span class="pnl-title">Custom Objects</span>
-          </div>
-          <div class="pnl-actions">
-            <button class="btn-icon" id="refreshBtn" title="Refresh">
-              <svg width="13" height="13" viewBox="0 0 14 14" fill="none">
-                <path d="M12.5 7A5.5 5.5 0 1 1 7 1.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-                <path d="M7 1.5l2-2M7 1.5l2 2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-              </svg>
-            </button>
-          </div>
+    <!-- ── VIEW 2: Records ──────────────────────────────────── -->
+    <div class="view" id="view-records">
+      <div class="toolbar">
+        <div class="toolbar-left">
+          <span class="toolbar-title" id="rec-title">Records</span>
+          <span class="toolbar-badge" id="rec-count">—</span>
         </div>
+        <div class="toolbar-right">
+          <button class="btn btn-ghost" id="btn-export">
+            <svg width="12" height="12" viewBox="0 0 14 14" fill="none">
+              <path d="M7 1v8M4 6l3 3 3-3M2 10v2h10v-2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>Export
+          </button>
+          <button class="btn btn-primary" id="btn-new-rec">
+            <svg width="12" height="12" viewBox="0 0 14 14" fill="none">
+              <path d="M7 2v10M2 7h10" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+            </svg>New
+          </button>
+        </div>
+      </div>
 
-        <div class="search-bar">
+      <div class="filter-row">
+        <div class="filter-row-wrap">
           <svg width="13" height="13" viewBox="0 0 14 14" fill="none">
             <circle cx="6" cy="6" r="4.5" stroke="currentColor" stroke-width="1.4"/>
             <path d="M9.5 9.5L13 13" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
           </svg>
-          <input type="text" id="objSearch" placeholder="Search custom objects…" autocomplete="off" spellcheck="false">
-        </div>
-
-        <div class="obj-scroll" id="objList">
-          <div class="loading-row"><div class="spinner"></div> Loading objects…</div>
+          <input class="filter-input" id="rec-filter" type="text" placeholder="Filter records…" autocomplete="off" spellcheck="false"/>
         </div>
       </div>
 
-      <!-- ── PANEL 2: Records ──────────────────────────────────────── -->
-      <div class="panel" id="panelRecords">
-        <div class="pnl-hdr">
-          <div class="pnl-title-row">
-            <span class="pnl-title" id="recTitle">Records</span>
-            <span class="count-badge" id="recCount">—</span>
-          </div>
-          <div class="pnl-actions">
-            <button class="btn btn-ghost" id="exportBtn">
-              <svg width="12" height="12" viewBox="0 0 14 14" fill="none">
-                <path d="M7 1v8M4 6l3 3 3-3M2 10v2h10v-2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-              </svg>
-              Export
-            </button>
-            <button class="btn btn-primary" id="newRecBtn">
-              <svg width="12" height="12" viewBox="0 0 14 14" fill="none">
-                <path d="M7 2v10M2 7h10" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
-              </svg>
-              New Record
-            </button>
-          </div>
-        </div>
+      <div class="loading-row" id="rec-loading" style="display:none">
+        <div class="spinner"></div><span id="rec-load-lbl">Loading records…</span>
+      </div>
 
-        <div class="filter-bar">
-          <div class="filter-wrap">
-            <svg width="13" height="13" viewBox="0 0 14 14" fill="none">
-              <circle cx="6" cy="6" r="4.5" stroke="currentColor" stroke-width="1.4"/>
-              <path d="M9.5 9.5L13 13" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
-            </svg>
-            <input class="filter-input" id="recSearch" type="text" placeholder="Filter records…" autocomplete="off" spellcheck="false">
-          </div>
+      <div class="table-wrap" id="tbl-wrap">
+        <table class="grid">
+          <thead id="t-head"></thead>
+          <tbody id="t-body"></tbody>
+        </table>
+        <div class="tbl-empty" id="tbl-empty" style="display:none">
+          <svg width="40" height="40" viewBox="0 0 40 40" fill="none">
+            <rect x="5" y="10" width="30" height="24" rx="3" stroke="currentColor" stroke-width="1.5" stroke-dasharray="3 2.5"/>
+            <path d="M12 18h16M12 23h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" opacity=".4"/>
+          </svg>
+          <p>No records found</p>
         </div>
+      </div>
+    </div>
 
-        <div class="loading-row" id="recLoading" style="display:none">
-          <div class="spinner"></div>
-          <span id="recLoadLabel">Loading records…</span>
-        </div>
-
-        <div class="table-wrap" id="tableWrap">
-          <table class="grid">
-            <thead id="tHead"></thead>
-            <tbody id="tBody"></tbody>
-          </table>
-          <div class="table-empty" id="tableEmpty" style="display:none">
-            <svg width="40" height="40" viewBox="0 0 40 40" fill="none">
-              <rect x="5" y="10" width="30" height="24" rx="3" stroke="currentColor" stroke-width="1.5" stroke-dasharray="3 2.5"/>
-              <path d="M12 18h16M12 23h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" opacity=".4"/>
-            </svg>
-            <p>No records found</p>
-          </div>
+    <!-- ── VIEW 3: Record detail ────────────────────────────── -->
+    <div class="view" id="view-detail">
+      <div class="toolbar">
+        <div class="toolbar-left"></div>
+        <div class="toolbar-right">
+          <button class="btn btn-danger" id="btn-delete" style="display:none">
+            <svg width="12" height="12" viewBox="0 0 14 14" fill="none">
+              <path d="M2 4h10M5 4V2h4v2M11 4l-.7 8H3.7L3 4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>Delete
+          </button>
+          <button class="btn btn-primary" id="btn-save">
+            <svg width="12" height="12" viewBox="0 0 14 14" fill="none">
+              <path d="M2 7l4 4 6-6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>Save
+          </button>
         </div>
       </div>
 
-      <!-- ── PANEL 3: Record detail ────────────────────────────────── -->
-      <div class="panel" id="panelDetail">
-        <div class="pnl-hdr">
-          <div></div><!-- spacer so actions align right -->
-          <div class="pnl-actions">
-            <button class="btn btn-danger" id="deleteBtn" style="display:none">
-              <svg width="12" height="12" viewBox="0 0 14 14" fill="none">
-                <path d="M2 4h10M5 4V2h4v2M11 4l-.7 8H3.7L3 4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
-              </svg>
-              Delete
-            </button>
-            <button class="btn btn-primary" id="saveBtn">
-              <svg width="12" height="12" viewBox="0 0 14 14" fill="none">
-                <path d="M2 7l4 4 6-6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
-              </svg>
-              Save
-            </button>
-          </div>
+      <div class="detail-body">
+        <div class="rec-hero">
+          <h2 id="rec-title-detail">Record</h2>
+          <span class="rec-badge is-new" id="rec-badge">NEW</span>
         </div>
-
-        <div class="detail-scroll">
-          <div class="detail-hero">
-            <h2 id="detailTitle">Record</h2>
-            <span class="hero-badge" id="detailBadge">NEW</span>
-          </div>
-          <div class="form-grid" id="detailForm"></div>
-        </div>
-
-        <div class="save-bar" id="saveBar" style="display:none"></div>
+        <div class="form-grid" id="rec-form"></div>
       </div>
 
-    </div><!-- /.panels -->
-  </div><!-- /#app -->
+      <div class="save-bar" id="save-bar" style="display:none"></div>
+    </div>
 
-  <script src="src/fsm-api.js"></script>
-  <script src="src/csv-utils.js"></script>
-  <script src="src/app.js"></script>
+  </div><!-- /.view-stack -->
+</div><!-- /#app -->
+
+<!-- Debug toggle -->
+<button id="dbg-btn">🐛 Debug</button>
+<div id="dbg-panel">
+  <div id="dbg-bar">
+    <span>API Debug Log</span>
+    <button id="dbg-clear">Clear</button>
+    <button id="dbg-copy">Copy All</button>
+  </div>
+  <div id="dbg-log"><div class="dbg-empty">No API calls yet…</div></div>
+</div>
+
+<script src="src/fsm-api.js"></script>
+<script src="src/csv-utils.js"></script>
+<script src="src/app.js"></script>
 </body>
 </html>
