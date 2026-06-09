@@ -612,10 +612,10 @@
       var url = 'https://' + apiConfig.clusterHost + '/api/data/v4/UdoValue/' + recId +
         '?account=' + encodeURIComponent(apiConfig.account) +
         '&company=' + encodeURIComponent(apiConfig.company) + '&dtos=UdoValue.10';
-      var cid = DBG.startCallSync('DELETE', url, {}, null);
+      var cid = DBG.startCallSync('DELETE', url, { Authorization: 'Bearer …' }, null);
       fetch(url, {
         method: 'DELETE',
-        headers: { Authorization: 'Bearer ' + authToken, 'X-Account-Name': apiConfig.account, 'X-Company-Name': apiConfig.company, 'X-Client-Version': '1.0' }
+        headers: { 'Authorization': 'Bearer ' + authToken, 'Accept': 'application/json', 'X-Client-Version': '1.0' }
       }).then(function (res) {
         if (!res.ok) return res.text().then(function (t) { throw new Error('Delete failed (' + res.status + '): ' + t); });
         DBG.endCall(cid, res.status, 'OK', null, null);
@@ -703,11 +703,12 @@
         'Authorization':    'Bearer ' + token,
         'Content-Type':     'application/json',
         'Accept':           'application/json',
-        'X-Account-Name':   config.account,
-        'X-Company-Name':   config.company,
         'X-Client-Version': '1.0',
       };
-      // Only send X-Client-ID if we actually have one (avoid literal "undefined")
+      // NOTE: Do NOT send X-Account-Name / X-Company-Name headers.
+      // The FSM Query API CORS policy does not allow them, so including them
+      // makes the preflight reject the request ("Failed to fetch").
+      // account & company are already passed in the URL query string above.
       if (config.clientId) headers['X-Client-ID'] = config.clientId;
 
       var body = JSON.stringify({ query: sql });
@@ -748,13 +749,60 @@
         });
     };
 
-    var _u = FSM_API.upsertRecord.bind(FSM_API);
+    // Clean reimplementation of upsertRecord: same body structure as fsm-api.js
+    // but CORS-safe headers (no X-Account-Name / X-Company-Name) and a timeout.
     FSM_API.upsertRecord = function (config, token, objectName, record, fieldMetaMap, udoMetaId) {
-      var url = 'https://' + config.clusterHost + '/api/data/v4/UdoValue?account=' + encodeURIComponent(config.account) + '&company=' + encodeURIComponent(config.company) + '&dtos=UdoValue.10';
-      var cid = DBG.startCallSync('POST', url, { 'Content-Type': 'application/json' }, '(upsert body)');
-      return _u(config, token, objectName, record, fieldMetaMap, udoMetaId)
-        .then(function (r) { DBG.endCall(cid, 200, 'OK', r, null); return r; })
-        .catch(function (err) { var m = err.message.match(/\((\d+)\)/); DBG.endCall(cid, m ? +m[1] : 0, 'Error', null, err.message); throw err; });
+      var udfValues = Object.keys(record)
+        .filter(function (k) { var v = record[k]; return v !== null && v !== undefined && v !== ''; })
+        .map(function (fieldName) {
+          var fm = fieldMetaMap && fieldMetaMap[fieldName];
+          var udfId = fm && fm.id ? fm.id : null;
+          return { meta: udfId ? { id: udfId } : { externalId: fieldName }, value: String(record[fieldName]) };
+        });
+      var body = JSON.stringify({
+        meta: udoMetaId ? { id: udoMetaId } : { name: objectName },
+        udfValues: udfValues,
+      });
+      var url = 'https://' + config.clusterHost + '/api/data/v4/UdoValue' +
+        '?account=' + encodeURIComponent(config.account) +
+        '&company=' + encodeURIComponent(config.company) + '&dtos=UdoValue.10';
+      var headers = {
+        'Authorization':    'Bearer ' + token,
+        'Content-Type':     'application/json',
+        'Accept':           'application/json',
+        'X-Client-Version': '1.0',
+      };
+      if (config.clientId) headers['X-Client-ID'] = config.clientId;
+
+      var dispHeaders = {};
+      Object.keys(headers).forEach(function (k) {
+        dispHeaders[k] = (k === 'Authorization') ? 'Bearer ' + String(token).substring(0, 16) + '…' : headers[k];
+      });
+      var cid = DBG.startCallSync('POST', url, dispHeaders, body);
+
+      var controller = new AbortController();
+      var timer = setTimeout(function () { controller.abort(); }, 20000);
+
+      return fetch(url, { method: 'POST', headers: headers, body: body, signal: controller.signal })
+        .then(function (res) {
+          clearTimeout(timer);
+          return res.text().then(function (text) {
+            var parsed; try { parsed = JSON.parse(text); } catch (e) { parsed = text; }
+            if (!res.ok) {
+              var msg = (parsed && parsed.error && parsed.error.message) || (parsed && parsed.message) || text.substring(0, 300);
+              DBG.endCall(cid, res.status, 'Error', parsed, 'HTTP ' + res.status + ': ' + msg);
+              throw new Error('Upload failed (' + res.status + '): ' + msg);
+            }
+            DBG.endCall(cid, res.status, 'OK', parsed, null);
+            return parsed;
+          });
+        })
+        .catch(function (err) {
+          clearTimeout(timer);
+          var msg = err.name === 'AbortError' ? 'Upload timed out after 20s' : err.message;
+          DBG.endCall(cid, 0, 'Error', null, msg);
+          throw new Error(msg);
+        });
     };
   }
 
