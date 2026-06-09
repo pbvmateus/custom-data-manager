@@ -201,13 +201,48 @@
       if (t) {
         authToken = t;
         gotToken = true;
-        bootLog('✓ Token acquired (expires_in=' + (auth.expires_in || '?') + ')', '#9ae6b4');
+        var expiresIn = (auth && auth.expires_in) || 300;
+        bootLog('✓ Token acquired (expires_in=' + expiresIn + 's)', '#9ae6b4');
+        scheduleTokenRefresh(expiresIn);
         maybeStart();
       } else {
         bootLog('✗ No access_token in response: ' + JSON.stringify(auth), '#feb2b2');
         DBG.logError('REQUIRE_AUTHENTICATION returned no access_token: ' + JSON.stringify(auth));
       }
     });
+
+    // Proactively refresh the token 30s before it expires.
+    // This prevents 401s from in-flight requests when the token silently expires.
+    var _refreshTimer = null;
+    function scheduleTokenRefresh(expiresIn) {
+      if (_refreshTimer) clearTimeout(_refreshTimer);
+      var refreshIn = Math.max((expiresIn - 30) * 1000, 10000); // at least 10s
+      bootLog('  Token refresh scheduled in ' + Math.round(refreshIn/1000) + 's', '#718096');
+      _refreshTimer = setTimeout(function () {
+        bootLog('→ Proactive token refresh…', '#faf089');
+        SHELL_SDK.emit(SHELL_EVENTS.Version1.REQUIRE_AUTHENTICATION, { response_type: 'token' });
+      }, refreshIn);
+    }
+
+    // Exposed so _query can call it when it gets a 401 (reactive refresh + retry)
+    window._shellSdkRefreshToken = function () {
+      return new Promise(function (resolve) {
+        var handler = function (auth) {
+          if (typeof auth === 'string') { try { auth = JSON.parse(auth); } catch(e){} }
+          var t = (auth && auth.access_token) || (auth && auth.auth && auth.auth.access_token) || null;
+          if (t) {
+            authToken = t;
+            var expiresIn = (auth && auth.expires_in) || 300;
+            scheduleTokenRefresh(expiresIn);
+            bootLog('✓ Token refreshed (reactive, expires_in=' + expiresIn + 's)', '#9ae6b4');
+          }
+          SHELL_SDK.off(SHELL_EVENTS.Version1.REQUIRE_AUTHENTICATION, handler);
+          resolve(t);
+        };
+        SHELL_SDK.on(SHELL_EVENTS.Version1.REQUIRE_AUTHENTICATION, handler);
+        SHELL_SDK.emit(SHELL_EVENTS.Version1.REQUIRE_AUTHENTICATION, { response_type: 'token' });
+      });
+    };
 
     // Start only once we have BOTH the env context AND a token
     function maybeStart() {
@@ -887,31 +922,43 @@
       });
       var cid = DBG.startCallSync('POST', url, dispHeaders, body);
 
-      // Fetch with a 20s timeout
-      var controller = new AbortController();
-      var timer = setTimeout(function () { controller.abort(); }, 20000);
-
-      return fetch(url, { method: 'POST', headers: headers, body: body, signal: controller.signal })
-        .then(function (res) {
-          clearTimeout(timer);
-          return res.text().then(function (text) {
-            var parsed; try { parsed = JSON.parse(text); } catch (e) { parsed = text; }
-            if (!res.ok) {
-              DBG.endCall(cid, res.status, 'Error', parsed, 'HTTP ' + res.status + ': ' + text.substring(0, 300));
-              throw new Error('Query failed (' + res.status + '): ' + text.substring(0, 300));
+      function doFetch(tok) {
+        headers['Authorization'] = 'Bearer ' + tok;
+        var controller = new AbortController();
+        var timer = setTimeout(function () { controller.abort(); }, 20000);
+        return fetch(url, { method: 'POST', headers: headers, body: body, signal: controller.signal })
+          .then(function (res) {
+            clearTimeout(timer);
+            return res.text().then(function (text) {
+              var parsed; try { parsed = JSON.parse(text); } catch (e) { parsed = text; }
+              if (res.status === 401 && window._shellSdkRefreshToken) {
+                // Token expired — refresh and retry once
+                DBG.logError('401 on query — refreshing token and retrying…');
+                return window._shellSdkRefreshToken().then(function (newTok) {
+                  if (!newTok) throw new Error('Query failed (401): token refresh returned no token');
+                  return doFetch(newTok);
+                });
+              }
+              if (!res.ok) {
+                DBG.endCall(cid, res.status, 'Error', parsed, 'HTTP ' + res.status + ': ' + text.substring(0, 300));
+                throw new Error('Query failed (' + res.status + '): ' + text.substring(0, 300));
+              }
+              DBG.endCall(cid, res.status, 'OK', parsed, null);
+              return parsed;
+            });
+          })
+          .catch(function (err) {
+            clearTimeout(timer);
+            if (err.name === 'AbortError') {
+              var msg = 'Request timed out after 20s (no response from FSM API)';
+              DBG.endCall(cid, 0, 'Error', null, msg);
+              throw new Error(msg);
             }
-            DBG.endCall(cid, res.status, 'OK', parsed, null);
-            return parsed;
+            throw err;
           });
-        })
-        .catch(function (err) {
-          clearTimeout(timer);
-          var msg = err.name === 'AbortError'
-            ? 'Request timed out after 20s (no response from FSM API)'
-            : err.message;
-          DBG.endCall(cid, 0, 'Error', null, msg);
-          throw new Error(msg);
-        });
+      }
+
+      return doFetch(token);
     };
 
     // Clean reimplementation of upsertRecord: same body structure as fsm-api.js
@@ -1041,29 +1088,40 @@
       });
       var cid = DBG.startCallSync(method, url, dispHeaders, bodyStr);
 
-      var controller = new AbortController();
-      var timer = setTimeout(function () { controller.abort(); }, 20000);
-
-      return fetch(url, { method: method, headers: headers, body: bodyStr, signal: controller.signal })
-        .then(function (res) {
-          clearTimeout(timer);
-          return res.text().then(function (text) {
-            var parsed; try { parsed = JSON.parse(text); } catch (e) { parsed = text; }
-            if (!res.ok) {
-              var msg = (parsed && parsed.error && parsed.error.message) || (parsed && parsed.message) || text.substring(0, 300);
-              DBG.endCall(cid, res.status, 'Error', parsed, 'HTTP ' + res.status + ': ' + msg);
-              throw new Error((isUpdate ? 'Update' : 'Create') + ' failed (' + res.status + '): ' + msg);
-            }
-            DBG.endCall(cid, res.status, 'OK', parsed, null);
-            return parsed;
+      function doSave(tok) {
+        headers['Authorization'] = 'Bearer ' + tok;
+        var controller = new AbortController();
+        var timer = setTimeout(function () { controller.abort(); }, 20000);
+        return fetch(url, { method: method, headers: headers, body: bodyStr, signal: controller.signal })
+          .then(function (res) {
+            clearTimeout(timer);
+            return res.text().then(function (text) {
+              var parsed; try { parsed = JSON.parse(text); } catch (e) { parsed = text; }
+              if (res.status === 401 && window._shellSdkRefreshToken) {
+                DBG.logError('401 on save — refreshing token and retrying…');
+                return window._shellSdkRefreshToken().then(function (newTok) {
+                  if (!newTok) throw new Error('Save failed (401): token refresh returned no token');
+                  return doSave(newTok);
+                });
+              }
+              if (!res.ok) {
+                var msg = (parsed && parsed.error && parsed.error.message) || (parsed && parsed.message) || text.substring(0, 300);
+                DBG.endCall(cid, res.status, 'Error', parsed, 'HTTP ' + res.status + ': ' + msg);
+                throw new Error((isUpdate ? 'Update' : 'Create') + ' failed (' + res.status + '): ' + msg);
+              }
+              DBG.endCall(cid, res.status, 'OK', parsed, null);
+              return parsed;
+            });
+          })
+          .catch(function (err) {
+            clearTimeout(timer);
+            var msg = err.name === 'AbortError' ? 'Save timed out after 20s' : err.message;
+            if (!err.message.includes('401')) DBG.endCall(cid, 0, 'Error', null, msg);
+            throw new Error(msg);
           });
-        })
-        .catch(function (err) {
-          clearTimeout(timer);
-          var msg = err.name === 'AbortError' ? 'Save timed out after 20s' : err.message;
-          DBG.endCall(cid, 0, 'Error', null, msg);
-          throw new Error(msg);
-        });
+      }
+
+      return doSave(token);
     };
   }
 
