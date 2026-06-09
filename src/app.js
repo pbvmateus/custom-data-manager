@@ -681,22 +681,43 @@
       if (!ok) return;
       var recId = (editingRec && editingRec.__id) || editingRec.id;
       if (!recId) { showSaveBar('err', '✗ Record has no ID.'); return; }
+      var lastChanged = editingRec && editingRec.__lastChanged;
+      // DELETE does NOT accept dtos= parameter (CA-23 error).
+      // Use forceDelete=true to bypass lock, lastChanged for optimistic locking.
       var url = 'https://' + apiConfig.clusterHost + '/api/data/v4/UdoValue/' + recId +
-        '?account=' + encodeURIComponent(apiConfig.account) +
-        '&company=' + encodeURIComponent(apiConfig.company) + '&dtos=UdoValue.10';
-      var cid = DBG.startCallSync('DELETE', url, { Authorization: 'Bearer …' }, null);
-      fetch(url, {
-        method: 'DELETE',
-        headers: { 'Authorization': 'Bearer ' + authToken, 'Accept': 'application/json', 'X-Client-ID': (apiConfig.clientId || 'fsm-custom-objects-manager'), 'X-Client-Version': '1.0' }
-      }).then(function (res) {
-        if (!res.ok) return res.text().then(function (t) { throw new Error('Delete failed (' + res.status + '): ' + t); });
-        DBG.endCall(cid, res.status, 'OK', null, null);
-        navigateTo('/records');
-        return loadRecords();
-      }).catch(function (err) {
-        DBG.endCall(cid, 0, 'Error', null, err.message);
-        showSaveBar('err', '✗ ' + err.message);
+        '?account='  + encodeURIComponent(apiConfig.account) +
+        '&company='  + encodeURIComponent(apiConfig.company) +
+        '&forceDelete=true' +
+        (lastChanged != null ? '&lastChanged=' + lastChanged : '');
+      var reqHeaders = {
+        'Authorization':    'Bearer ' + authToken,
+        'Accept':           'application/json',
+        'X-Client-ID':      apiConfig.clientId || 'fsm-custom-objects-manager',
+        'X-Client-Version': '1.0',
+      };
+      var dispHeaders = {};
+      Object.keys(reqHeaders).forEach(function (k) {
+        dispHeaders[k] = (k === 'Authorization')
+          ? 'Bearer ' + String(authToken).substring(0, 16) + '…' : reqHeaders[k];
       });
+      var cid = DBG.startCallSync('DELETE', url, dispHeaders, null);
+      fetch(url, { method: 'DELETE', headers: reqHeaders })
+        .then(function (res) {
+          return res.text().then(function (t) {
+            if (!res.ok) {
+              var parsed; try { parsed = JSON.parse(t); } catch (e) { parsed = t; }
+              var msg = (parsed && parsed.message) || t.substring(0, 300);
+              DBG.endCall(cid, res.status, 'Error', parsed, msg);
+              throw new Error('Delete failed (' + res.status + '): ' + msg);
+            }
+            DBG.endCall(cid, res.status, 'OK', null, null);
+            navigateTo('/records');
+            return loadRecords();
+          });
+        })
+        .catch(function (err) {
+          showSaveBar('err', '✗ ' + err.message);
+        });
     });
   }
 
