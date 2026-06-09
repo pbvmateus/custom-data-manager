@@ -23,7 +23,7 @@ A Shell SDK extension that runs as a **home screen tile** inside SAP FSM. It let
 ```
 fsm-custom-objects/
 ├── index.html          ← Extension entry point (loaded by Shell in an iframe)
-├── manifest.json       ← FSM extension manifest
+├── appconfig.json      ← FSM extension config (read by Shell during registration)
 ├── assets/
 │   └── icon.svg
 └── src/
