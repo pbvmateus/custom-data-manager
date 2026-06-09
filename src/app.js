@@ -908,6 +908,9 @@
       var url = (isUpdate ? base + '/' + existingId : base) +
         '?account=' + encodeURIComponent(config.account) +
         '&company=' + encodeURIComponent(config.company) + '&dtos=UdoValue.10';
+      // forceUpdate=true tells FSM to overwrite even if the resource is
+      // locked/blocked (CA-28 / HTTP 423) due to sync or optimistic-lock state.
+      if (isUpdate) url += '&forceUpdate=true';
       var method = isUpdate ? 'PATCH' : 'POST';
 
       var headers = {
