@@ -25,6 +25,11 @@
     }
   });
 
+  // Debug module — createDBG is a hoisted function declaration (defined below),
+  // so this assignment works even though the definition appears later in the file.
+  var DBG = createDBG();
+  window.DBG = DBG;
+
   // ── Routes ─────────────────────────────────────────────────────────────
   const ROUTES = [
     { path: '/objects',        id: 'section-objects' },
@@ -709,7 +714,9 @@
   }
 
   // ── Debug module ──────────────────────────────────────────────────────
-  var DBG = (function () {
+  // NOTE: hoisted function declaration so DBG (assigned near the top of the
+  // IIFE) is ready before any code that calls DBG.init() / DBG.setCtx().
+  function createDBG() {
     var entries = [], ctxData = null, counter = 0;
 
     function init() {
@@ -788,8 +795,6 @@
     }
 
     return { init: init, setCtx: setCtx, logError: logError, startCallSync: startCallSync, endCall: endCall };
-  })();
-
-  window.DBG = DBG;
+  }
 
 })();
