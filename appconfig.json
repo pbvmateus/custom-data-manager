@@ -1,6 +1,26 @@
 {
   "name": "Custom Objects Manager",
+  "provider": "",
   "description": "Browse, filter, create, edit and delete SAP FSM Custom Object records.",
   "version": "1.0.0",
-  "provider": ""
+  "icon": "icon.png",
+  "useShellSDK": true,
+  "outletPositions": [
+    "SHELL_HOME_SCREEN"
+  ],
+  "shellNavigation": {
+    "icon": "database",
+    "sideNavigation": [
+      {
+        "pathSegment": "objects",
+        "labelTranslations": [
+          { "lang": "en", "value": "Custom Objects" }
+        ],
+        "viewUrl": "/#/objects",
+        "icon": "database",
+        "isDefault": true,
+        "children": []
+      }
+    ]
+  }
 }
