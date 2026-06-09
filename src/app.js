@@ -414,6 +414,18 @@
   }
 
   // ── Render table ──────────────────────────────────────────────────────
+  // For SELECTIONLIST fields, translate a stored key (e.g. "brown") to its
+  // display label (e.g. "Brown"). Other values pass through unchanged.
+  function displayValue(colKey, raw) {
+    if (raw == null || raw === '') return raw;
+    var def = fieldDefs.find(function (f) { return (f.id || f.name) === colKey || f.name === colKey; });
+    if (def && def.allowedValues && def.allowedValues.length) {
+      var match = def.allowedValues.find(function (av) { return av.key === raw; });
+      if (match) return match.label;
+    }
+    return raw;
+  }
+
   function renderTable() {
     var vis    = colOrder.filter(function (c) { return !hiddenCols.has(c); });
     var sorted = applySorted(filteredRecs);
@@ -447,12 +459,13 @@
     document.getElementById('t-body').innerHTML = sorted.map(function (rec, ri) {
       return '<tr data-ri="' + ri + '">' + vis.map(function (col) {
         var v = rec[col];
+        var disp = displayValue(col, v);
         var cell;
         if (v === null || v === undefined || v === '') cell = '<span class="cell-nil">—</span>';
         else if (v === true  || v === 'true')  cell = '<span class="cell-t">✓ true</span>';
         else if (v === false || v === 'false') cell = '<span class="cell-f">false</span>';
-        else cell = esc(String(v));
-        return '<td title="' + esc(String(v == null ? '' : v)) + '">' + cell + '</td>';
+        else cell = esc(String(disp));
+        return '<td title="' + esc(String(disp == null ? '' : disp)) + '">' + cell + '</td>';
       }).join('') + '</tr>';
     }).join('');
 
@@ -606,7 +619,7 @@
     if (type === 'SELECTIONLISTWITHFREETEXT') {
       var lid = 'dl_' + n;
       return '<input class="co-fld-ctrl" list="' + lid + '" data-field="' + esc(n) + '" value="' + esc(v) + '">' +
-        '<datalist id="' + lid + '">' + (f.allowedValues || []).map(function (av) { return '<option value="' + esc(av.key) + '">'; }).join('') + '</datalist>';
+        '<datalist id="' + lid + '">' + (f.allowedValues || []).map(function (av) { return '<option value="' + esc(av.key) + '">' + esc(av.label || av.key) + '</option>'; }).join('') + '</datalist>';
     }
     if (type === 'DATE')     return '<input class="co-fld-ctrl" type="date" data-field="' + esc(n) + '" value="' + esc(v.substring(0,10)) + '">';
     if (type === 'DATETIME') return '<input class="co-fld-ctrl" type="datetime-local" data-field="' + esc(n) + '" value="' + esc(v.substring(0,16)) + '">';
@@ -614,7 +627,8 @@
     if (type === 'INT')      return '<input class="co-fld-ctrl" type="number" step="1" data-field="' + esc(n) + '" value="' + esc(v) + '">';
     if (['FLOAT','PERCENTAGE','UNIT','MONETARYAMOUNT'].includes(type))
       return '<input class="co-fld-ctrl" type="number" step="any" data-field="' + esc(n) + '" value="' + esc(v) + '">';
-    if (/description|note|comment/i.test(n))
+    // Use the field NAME (not the id) to detect long-text fields.
+    if (/description|note|comment/i.test(f.name || ''))
       return '<textarea class="co-fld-ctrl" data-field="' + esc(n) + '">' + esc(v) + '</textarea>';
     return '<input class="co-fld-ctrl" type="text" data-field="' + esc(n) + '" value="' + esc(v) + '">';
   }
@@ -752,6 +766,27 @@
 
   function patchFsmApi() {
     if (!window.FSM_API) return;
+
+    // Fix selection-list parsing. FSM returns selectionKeyValues as a PLAIN
+    // object { "green": "Green", "blue": "Blue", ... } for SELECTIONLIST /
+    // SELECTIONLISTWITHFREETEXT fields. The original parser only handled arrays
+    // or a .keyValues wrapper, so dropdowns came back empty. Handle all shapes.
+    FSM_API._extractAllowedValues = function (skv) {
+      if (!skv) return null;
+      // Array of {key,value} or {key,label}
+      if (Array.isArray(skv)) {
+        if (!skv.length) return null;
+        return skv.map(function (kv) { return { key: kv.key, label: kv.value || kv.label || kv.key }; });
+      }
+      // Wrapper { keyValues: [...] }
+      if (skv.keyValues && Array.isArray(skv.keyValues)) {
+        return skv.keyValues.map(function (kv) { return { key: kv.key, label: kv.value || kv.label || kv.key }; });
+      }
+      // Plain map { key: label, ... }  ← the real FSM format
+      var keys = Object.keys(skv);
+      if (!keys.length) return null;
+      return keys.map(function (k) { return { key: k, label: skv[k] != null ? String(skv[k]) : k }; });
+    };
 
     // Clean reimplementation of _query: correct headers (no broken X-Client-ID),
     // proper Authorization, and a fetch timeout so we fail fast instead of hanging.
