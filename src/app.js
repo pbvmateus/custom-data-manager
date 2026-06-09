@@ -706,7 +706,6 @@
     var cols = colOrder.filter(function (c) { return !hiddenCols.has(c); });
     if (!cols.length) return;
 
-    // Build CSV
     var header = cols.map(function (c) {
       var name = colLabel(c);
       return (name.indexOf(',') >= 0 || name.indexOf('"') >= 0)
@@ -721,35 +720,24 @@
     });
     var csv = [header].concat(rows).join('\n');
     var filename = (selectedObj ? selectedObj.name : 'records') + '_export.csv';
-
-    // The FSM Shell iframe has sandbox restrictions that block file downloads.
-    // Best approach: copy CSV to clipboard, with a fallback dialog.
-    if (navigator.clipboard && navigator.clipboard.writeText) {
-      navigator.clipboard.writeText(csv).then(function () {
-        showExportSuccess(filename, csv, true);
-      }).catch(function () {
-        showExportSuccess(filename, csv, false);
-      });
-    } else {
-      showExportSuccess(filename, csv, false);
-    }
+    showExportModal(filename, csv);
   }
 
-  function showExportSuccess(filename, csv, copied) {
-    // Show a modal with the CSV content so user can copy/save it
+  function showExportModal(filename, csv) {
     var ov = document.createElement('div');
     ov.className = 'co-overlay';
     ov.innerHTML =
       '<div class="co-dialog" style="max-width:560px;width:96vw">' +
         '<h3 style="margin-bottom:6px">Export: ' + esc(filename) + '</h3>' +
         '<p style="margin-bottom:10px;font-size:12px;color:#4a5568">' +
-          (copied
-            ? '✓ CSV copied to clipboard! Paste into a .csv file or Excel.'
-            : 'Copy the CSV below and paste into a .csv file or Excel.') +
+          'The CSV is selected below — press <kbd style="background:#f3f4f6;border:1px solid #d9dbe0;' +
+          'border-radius:4px;padding:1px 5px;font-family:monospace;font-size:11px">Ctrl+C</kbd> ' +
+          '(or <kbd style="background:#f3f4f6;border:1px solid #d9dbe0;border-radius:4px;padding:1px 5px;' +
+          'font-family:monospace;font-size:11px">⌘C</kbd>) to copy, then paste into Excel or a .csv file.' +
         '</p>' +
-        '<textarea id="_csv-area" readonly style="width:100%;height:180px;font-family:monospace;' +
+        '<textarea id="_csv-area" readonly style="width:100%;height:200px;font-family:monospace;' +
           'font-size:11px;padding:8px;border:1px solid #d9dbe0;border-radius:6px;' +
-          'background:#f5f6f8;resize:vertical;color:#1d2129;outline:none">' +
+          'background:#f5f6f8;resize:vertical;color:#1d2129;outline:none;line-height:1.5">' +
           esc(csv) +
         '</textarea>' +
         '<div class="co-dialog-btns" style="margin-top:12px">' +
@@ -759,21 +747,21 @@
       '</div>';
     document.body.appendChild(ov);
 
+    // Auto-select the textarea content immediately
     var area = ov.querySelector('#_csv-area');
-    // Select all text in the textarea immediately
-    setTimeout(function () { area.focus(); area.select(); }, 50);
+    setTimeout(function () { area.focus(); area.select(); }, 80);
 
+    // Copy button uses execCommand (works in sandboxed iframes unlike Clipboard API)
     ov.querySelector('#_csv-copy').addEventListener('click', function () {
+      area.focus();
       area.select();
-      if (navigator.clipboard && navigator.clipboard.writeText) {
-        navigator.clipboard.writeText(csv).then(function () {
-          ov.querySelector('#_csv-copy').textContent = '✓ Copied!';
-        });
-      } else {
-        document.execCommand('copy');
-        ov.querySelector('#_csv-copy').textContent = '✓ Copied!';
-      }
+      var ok = false;
+      try { ok = document.execCommand('copy'); } catch (e) { /* ignore */ }
+      var btn = ov.querySelector('#_csv-copy');
+      btn.textContent = ok ? '✓ Copied!' : 'Select all → Ctrl+C';
+      setTimeout(function () { btn.textContent = 'Copy CSV'; }, 2000);
     });
+
     ov.querySelector('#_csv-close').addEventListener('click', function () { ov.remove(); });
   }
 
