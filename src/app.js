@@ -164,6 +164,8 @@
         clusterHost: ctx.cloudHost,
         account:     ctx.account,
         company:     ctx.company,
+        // FSM API requires X-Client-ID. Use our extension's clientIdentifier.
+        clientId:    'fsm-custom-objects-manager',
       };
       gotContext = true;
       bootLog('  cloudHost=' + ctx.cloudHost + ' account=' + ctx.account + ' company=' + ctx.company);
@@ -615,7 +617,7 @@
       var cid = DBG.startCallSync('DELETE', url, { Authorization: 'Bearer …' }, null);
       fetch(url, {
         method: 'DELETE',
-        headers: { 'Authorization': 'Bearer ' + authToken, 'Accept': 'application/json', 'X-Client-Version': '1.0' }
+        headers: { 'Authorization': 'Bearer ' + authToken, 'Accept': 'application/json', 'X-Client-ID': (apiConfig.clientId || 'fsm-custom-objects-manager'), 'X-Client-Version': '1.0' }
       }).then(function (res) {
         if (!res.ok) return res.text().then(function (t) { throw new Error('Delete failed (' + res.status + '): ' + t); });
         DBG.endCall(cid, res.status, 'OK', null, null);
@@ -703,13 +705,12 @@
         'Authorization':    'Bearer ' + token,
         'Content-Type':     'application/json',
         'Accept':           'application/json',
+        'X-Client-ID':      config.clientId || 'fsm-custom-objects-manager',
         'X-Client-Version': '1.0',
       };
-      // NOTE: Do NOT send X-Account-Name / X-Company-Name headers.
-      // The FSM Query API CORS policy does not allow them, so including them
-      // makes the preflight reject the request ("Failed to fetch").
-      // account & company are already passed in the URL query string above.
-      if (config.clientId) headers['X-Client-ID'] = config.clientId;
+      // NOTE: Do NOT send X-Account-Name / X-Company-Name headers — the FSM
+      // Query API CORS policy does not allow them. account & company are in the URL.
+      // X-Client-ID + X-Client-Version ARE required by the FSM API.
 
       var body = JSON.stringify({ query: sql });
 
@@ -770,9 +771,9 @@
         'Authorization':    'Bearer ' + token,
         'Content-Type':     'application/json',
         'Accept':           'application/json',
+        'X-Client-ID':      config.clientId || 'fsm-custom-objects-manager',
         'X-Client-Version': '1.0',
       };
-      if (config.clientId) headers['X-Client-ID'] = config.clientId;
 
       var dispHeaders = {};
       Object.keys(headers).forEach(function (k) {
