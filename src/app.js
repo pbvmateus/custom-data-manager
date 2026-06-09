@@ -103,20 +103,29 @@
     // Init ShellSDK
     const SHELL_SDK = ShellSdk.init(parent, '*');
 
-    // Request current Shell language (same as sample)
-    SHELL_SDK.emit(SHELL_EVENTS.Version1.GET_STORAGE_ITEM, 'Cockpit_SelectedLocale');
+    var contextReceived = false;
+
+    // IMPORTANT: register ALL listeners BEFORE emitting any event.
+    // A fast Shell response can arrive before the listener is attached.
+
+    SHELL_SDK.on(SHELL_EVENTS.ERROR, function (err) {
+      console.error('[Custom Objects] Shell error:', err);
+      DBG.logError('SHELL ERROR: ' + JSON.stringify(err));
+    });
+
     SHELL_SDK.on(SHELL_EVENTS.Version1.GET_STORAGE_ITEM, function (locale) {
       console.log('[Custom Objects] Shell locale:', locale);
     });
 
-    // Request context — clientIdentifier identifies this extension to the Shell
-    // The Shell returns the active session token (user already logged in)
-    SHELL_SDK.emit(SHELL_EVENTS.Version1.REQUIRE_CONTEXT, {
-      clientIdentifier: 'fsm-custom-objects-manager',
-      auth: { response_type: 'token' },
-    });
-
+    // Context handler — fires when the Shell returns session token + env
     SHELL_SDK.on(SHELL_EVENTS.Version1.REQUIRE_CONTEXT, function (ctx) {
+      contextReceived = true;
+
+      // ctx may arrive as a JSON string in some Shell versions — parse it
+      if (typeof ctx === 'string') {
+        try { ctx = JSON.parse(ctx); } catch (e) { /* leave as-is */ }
+      }
+
       authToken = (ctx.auth && ctx.auth.access_token) || ctx.authToken || null;
       apiConfig = {
         clusterHost: ctx.cloudHost,
@@ -133,16 +142,54 @@
         hasToken:  !!authToken,
       });
 
-      // Hide loading, start app
+      // If the Shell didn't include a token, request one explicitly
+      if (!authToken) {
+        DBG.logError('No token in REQUIRE_CONTEXT — requesting via REQUIRE_AUTHENTICATION');
+        SHELL_SDK.emit(SHELL_EVENTS.Version1.REQUIRE_AUTHENTICATION, { response_type: 'token' });
+        return;
+      }
+      startApp();
+    });
+
+    // Some Shell versions deliver the token via REQUIRE_AUTHENTICATION
+    SHELL_SDK.on(SHELL_EVENTS.Version1.REQUIRE_AUTHENTICATION, function (auth) {
+      if (typeof auth === 'string') {
+        try { auth = JSON.parse(auth); } catch (e) { /* leave as-is */ }
+      }
+      var token = (auth && auth.access_token) || (auth && auth.auth && auth.auth.access_token) || null;
+      if (token) {
+        authToken = token;
+        DBG.logError('Token received via REQUIRE_AUTHENTICATION');
+        if (apiConfig && apiConfig.clusterHost) startApp();
+      }
+    });
+
+    // Now emit — all listeners are in place
+    SHELL_SDK.emit(SHELL_EVENTS.Version1.GET_STORAGE_ITEM, 'Cockpit_SelectedLocale');
+    SHELL_SDK.emit(SHELL_EVENTS.Version1.REQUIRE_CONTEXT, {
+      clientIdentifier: 'fsm-custom-objects-manager',
+      auth: { response_type: 'token' },
+    });
+
+    // Diagnostic: if no context after 8s, surface it instead of hanging forever
+    setTimeout(function () {
+      if (!contextReceived) {
+        document.getElementById('load-msg').textContent =
+          'No response from Shell. Open the 🐛 Debug panel (bottom-right) for details.';
+        DBG.setCtx({
+          _status:  'NO_CONTEXT_RESPONSE',
+          _message: 'REQUIRE_CONTEXT was emitted but the Shell never responded within 8 seconds.',
+          _emitted: 'clientIdentifier=fsm-custom-objects-manager, auth.response_type=token',
+          _hint:    'Extension is embedded but Shell returned no context. Verify the clientIdentifier matches a registered OAuth client in FSM Admin → Account → Clients.',
+        });
+      }
+    }, 8000);
+
+    function startApp() {
       document.getElementById('loading-overlay').style.display = 'none';
       bindUI();
       loadObjects();
-    });
-
-    SHELL_SDK.on(SHELL_EVENTS.ERROR, function (err) {
-      console.error('[Custom Objects] Shell error:', err);
-      DBG.logError(String(err));
-    });
+    }
 
   } else {
     // Standalone (dev) mode — show own nav and top bar
